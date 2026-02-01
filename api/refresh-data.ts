@@ -98,23 +98,32 @@ interface NetworkAnalytics {
   submissions: SubmissionsAnalysis;
 }
 
-// Transaction wrapper from account_tx response
+// Transaction from account_tx response - can be in tx or tx_json field
+interface TxData {
+  TransactionType?: string;
+  Account?: string;
+  Destination?: string;
+  Amount?: string | number | { currency: string; value: string };
+  hash?: string;
+  date?: number;
+  Memos?: Array<{
+    Memo?: {
+      MemoType?: string;
+      MemoData?: string;
+    };
+  }>;
+}
+
 interface TxWrapper {
-  tx?: {
-    TransactionType?: string;
-    Account?: string;
-    Destination?: string;
-    Amount?: string | number | { currency: string; value: string };
-    hash?: string;
-    date?: number;
-    Memos?: Array<{
-      Memo?: {
-        MemoType?: string;
-        MemoData?: string;
-      };
-    }>;
-  };
+  tx?: TxData;
+  tx_json?: TxData;  // xrpl.js v4+ uses tx_json
   meta?: TransactionMetadata;
+  hash?: string;
+}
+
+// Helper to get transaction data from wrapper (handles both tx and tx_json)
+function getTxData(txWrapper: TxWrapper): TxData | undefined {
+  return txWrapper.tx_json || txWrapper.tx;
 }
 
 // Helper functions
@@ -220,7 +229,7 @@ async function analyzeRewardTransactions(
   const rewardList: RewardEntry[] = [];
 
   for (const txWrapper of txs) {
-    const tx = txWrapper.tx;
+    const tx = getTxData(txWrapper);
     if (!tx) continue;
 
     // Only outgoing payments from reward address
@@ -312,7 +321,7 @@ function analyzeMemoTransactions(txs: TxWrapper[]): SubmissionsAnalysis {
   const submissionList: SubmissionEntry[] = [];
 
   for (const txWrapper of txs) {
-    const tx = txWrapper.tx;
+    const tx = getTxData(txWrapper);
     if (!tx) continue;
 
     // Only incoming payments to memo address
