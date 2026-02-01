@@ -370,12 +370,14 @@ function analyzeMemoTransactions(txs: TxWrapper[]): SubmissionsAnalysis {
   };
 }
 
-// Main handler
-export default async function handler(request: Request): Promise<Response> {
+// Main handler - using Vercel's API
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+
+export default async function handler(request: VercelRequest, response: VercelResponse) {
   // Verify cron secret in production
-  const authHeader = request.headers.get('authorization');
+  const authHeader = request.headers['authorization'] as string | undefined;
   if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    return new Response('Unauthorized', { status: 401 });
+    return response.status(401).send('Unauthorized');
   }
 
   const startTime = Date.now();
@@ -425,7 +427,7 @@ export default async function handler(request: Request): Promise<Response> {
 
     const elapsedMs = Date.now() - startTime;
 
-    return Response.json({
+    return response.status(200).json({
       success: true,
       elapsed_ms: elapsedMs,
       blob_url: blob.url,
@@ -441,14 +443,11 @@ export default async function handler(request: Request): Promise<Response> {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     console.error('Refresh data error:', errorMessage);
 
-    return Response.json(
-      {
-        success: false,
-        error: errorMessage,
-        elapsed_ms: Date.now() - startTime,
-      },
-      { status: 500 }
-    );
+    return response.status(500).json({
+      success: false,
+      error: errorMessage,
+      elapsed_ms: Date.now() - startTime,
+    });
   } finally {
     // Clean up XRPL connection
     if (client?.isConnected()) {
