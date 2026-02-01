@@ -42,10 +42,16 @@ const DEFAULT_BLOB_URL = 'https://dclwht8rlliznsdz.public.blob.vercel-storage.co
 
 export async function fetchNetworkData(): Promise<NetworkData> {
   // Use Vercel Blob URL if set, otherwise fallback to Blob (prod) or local dev data.
-  const dataUrl =
+  const baseUrl =
     import.meta.env.VITE_DATA_URL ||
     (import.meta.env.DEV ? '/data/network.json' : DEFAULT_BLOB_URL);
-  const response = await fetch(dataUrl);
+  
+  // Add cache-busting parameter to prevent browser/CDN caching stale data
+  const dataUrl = `${baseUrl}?t=${Date.now()}`;
+  
+  const response = await fetch(dataUrl, {
+    cache: 'no-store' // Ensure fresh data on every request
+  });
   if (!response.ok) {
     throw new Error(`Failed to fetch network data: ${response.statusText}`);
   }
