@@ -1,7 +1,11 @@
 {
   "metadata": {
     "generated_at": "2026-02-01T04:13:10.783395+00:00",
-    "reward_address": "rGBKxoTcavpfEso7ASRELZAMcCMqKa8oFk",
+    "ledger_index": 0,
+    "reward_addresses": [
+      "rGBKxoTcavpfEso7ASRELZAMcCMqKa8oFk",
+      "rKt4peDozpRW9zdYGiTZC54DSNU3Af6pQE"
+    ],
     "memo_address": "rwdm72S9YVKkZjeADKU2bbUMuY4vPnSfH7",
     "reward_txs_fetched": 177,
     "memo_txs_fetched": 569
@@ -998,5 +1002,14 @@
         "date": "2026-01-31"
       }
     ]
+  },
+  "task_lifecycle": {
+    "total_tasks_inferred": 0,
+    "tasks_completed": 0,
+    "tasks_pending": 0,
+    "tasks_expired": 0,
+    "completion_rate": 0,
+    "avg_time_to_reward_hours": 0,
+    "daily_lifecycle": []
   }
 }

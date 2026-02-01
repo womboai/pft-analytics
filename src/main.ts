@@ -68,6 +68,41 @@ function renderDashboard(data: NetworkData) {
     </div>
   `;
 
+  // Task lifecycle metrics
+  const lifecycle = data.task_lifecycle;
+  const completionRate = lifecycle.completion_rate;
+  const avgTimeToReward = lifecycle.avg_time_to_reward_hours;
+
+  document.getElementById('task-lifecycle')!.innerHTML = `
+    <h2>Task Lifecycle</h2>
+    <div class="lifecycle-grid">
+      <div class="lifecycle-card">
+        <div class="value">${lifecycle.total_tasks_inferred}</div>
+        <div class="label">Tasks Submitted</div>
+      </div>
+      <div class="lifecycle-card">
+        <div class="value">${lifecycle.tasks_completed}</div>
+        <div class="label">Tasks Completed</div>
+      </div>
+      <div class="lifecycle-card">
+        <div class="value">${lifecycle.tasks_pending}</div>
+        <div class="label">Pending</div>
+      </div>
+      <div class="lifecycle-card">
+        <div class="value">${lifecycle.tasks_expired}</div>
+        <div class="label">Expired</div>
+      </div>
+      <div class="lifecycle-card wide">
+        <div class="value">${completionRate.toFixed(1)}%</div>
+        <div class="label">Completion Rate</div>
+      </div>
+      <div class="lifecycle-card wide">
+        <div class="value">${avgTimeToReward.toFixed(1)}h</div>
+        <div class="label">Avg Time to Reward</div>
+      </div>
+    </div>
+  `;
+
   // Leaderboard - table-based layout with Balance + Earned
   const leaderboardRows = data.rewards.leaderboard.slice(0, 10).map((entry, i) => `
     <tr class="${i < 3 ? 'top-' + (i + 1) : ''}" data-address="${entry.address}">
@@ -265,6 +300,10 @@ async function init() {
       </section>
       <section id="derived-metrics" class="section full-width">
         <h2>Derived Metrics</h2>
+        <div class="loading">Calculating...</div>
+      </section>
+      <section id="task-lifecycle" class="section full-width">
+        <h2>Task Lifecycle</h2>
         <div class="loading">Calculating...</div>
       </section>
       <section id="leaderboard" class="section">

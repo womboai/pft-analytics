@@ -25,11 +25,14 @@ RPC_WS_URL = "wss://rpc.testnet.postfiat.org:6007"
 RIPPLE_EPOCH = 946684800
 
 # TaskNode addresses
-REWARD_ADDRESS = "rGBKxoTcavpfEso7ASRELZAMcCMqKa8oFk"  # Sends PFT rewards
+REWARD_ADDRESSES = [
+    "rGBKxoTcavpfEso7ASRELZAMcCMqKa8oFk",  # Primary reward wallet
+    "rKt4peDozpRW9zdYGiTZC54DSNU3Af6pQE",  # Secondary reward wallet
+]
 MEMO_ADDRESS = "rwdm72S9YVKkZjeADKU2bbUMuY4vPnSfH7"  # Receives task memos
 
 # System accounts to exclude
-SYSTEM_ACCOUNTS = {REWARD_ADDRESS, MEMO_ADDRESS, "rrrrrrrrrrrrrrrrrrrrrhoLvTp"}
+SYSTEM_ACCOUNTS = set(REWARD_ADDRESSES + [MEMO_ADDRESS, "rrrrrrrrrrrrrrrrrrrrrhoLvTp"])
 
 
 def unix_from_ripple(ripple_ts: int) -> int:
@@ -131,7 +134,7 @@ async def analyze_reward_transactions(ws, txs: list) -> dict:
         # Only outgoing payments
         if tx.get("TransactionType") != "Payment":
             continue
-        if tx.get("Account") != REWARD_ADDRESS:
+        if tx.get("Account") not in REWARD_ADDRESSES:
             continue
 
         # Parse PFT amount
@@ -283,11 +286,17 @@ async def main():
 
     context = ssl._create_unverified_context()
     async with websockets.connect(RPC_WS_URL, ssl=context) as ws:
+        # Get current ledger index for liveness indicator
+        ledger_resp = await rpc_call(ws, {"command": "ledger_current"})
+        ledger_index = ledger_resp.get("result", {}).get("ledger_current_index", 0)
 
-        # Fetch reward transactions
-        print(f"\nFetching reward transactions from {REWARD_ADDRESS}...", file=sys.stderr)
-        reward_txs = await fetch_all_account_tx(ws, REWARD_ADDRESS, args.max_txs)
-        print(f"  Got {len(reward_txs)} transactions", file=sys.stderr)
+        # Fetch reward transactions from all reward wallets
+        reward_txs = []
+        for reward_address in REWARD_ADDRESSES:
+            print(f"\nFetching reward transactions from {reward_address}...", file=sys.stderr)
+            addr_txs = await fetch_all_account_tx(ws, reward_address, args.max_txs)
+            reward_txs.extend(addr_txs)
+            print(f"  Got {len(addr_txs)} transactions", file=sys.stderr)
 
         # Fetch memo transactions
         print(f"\nFetching memo transactions to {MEMO_ADDRESS}...", file=sys.stderr)
@@ -303,7 +312,8 @@ async def main():
         analytics = {
             "metadata": {
                 "generated_at": datetime.now(timezone.utc).isoformat(),
-                "reward_address": REWARD_ADDRESS,
+                "ledger_index": ledger_index,
+                "reward_addresses": REWARD_ADDRESSES,
                 "memo_address": MEMO_ADDRESS,
                 "reward_txs_fetched": len(reward_txs),
                 "memo_txs_fetched": len(memo_txs),
@@ -317,6 +327,15 @@ async def main():
             },
             "rewards": rewards,
             "submissions": submissions,
+            "task_lifecycle": {
+                "total_tasks_inferred": 0,
+                "tasks_completed": 0,
+                "tasks_pending": 0,
+                "tasks_expired": 0,
+                "completion_rate": 0,
+                "avg_time_to_reward_hours": 0,
+                "daily_lifecycle": [],
+            },
         }
 
         # Output

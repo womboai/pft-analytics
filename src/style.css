@@ -590,6 +590,41 @@ body {
   line-height: 1.4;
 }
 
+/* Task Lifecycle */
+.lifecycle-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.lifecycle-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1rem;
+  text-align: center;
+}
+
+.lifecycle-card.wide {
+  grid-column: span 2;
+}
+
+.lifecycle-card .value {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 0.25rem;
+}
+
+.lifecycle-card .label {
+  font-size: 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
 /* Daily Distribution Table */
 .daily-table {
   display: flex;
@@ -831,6 +866,10 @@ body {
 
   .derived-card {
     min-width: unset;
+  }
+
+  .lifecycle-card.wide {
+    grid-column: span 1;
   }
 
   /* Responsive leaderboard table */

@@ -4,7 +4,7 @@ export interface NetworkData {
   metadata: {
     generated_at: string;
     ledger_index: number;
-    reward_address: string;
+    reward_addresses: string[];
     memo_address: string;
   };
   network_totals: {
@@ -21,6 +21,20 @@ export interface NetworkData {
   submissions: {
     daily_submissions: Array<{ date: string; submissions: number }>;
     top_submitters: Array<{ address: string; submissions: number }>;
+  };
+  task_lifecycle: {
+    total_tasks_inferred: number;
+    tasks_completed: number;
+    tasks_pending: number;
+    tasks_expired: number;
+    completion_rate: number;
+    avg_time_to_reward_hours: number;
+    daily_lifecycle: Array<{
+      date: string;
+      submitted: number;
+      completed: number;
+      expired: number;
+    }>;
   };
 }
 

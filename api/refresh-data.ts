@@ -23,6 +23,7 @@ const REWARD_ADDRESSES = [
   'rKt4peDozpRW9zdYGiTZC54DSNU3Af6pQE', // Secondary reward wallet
 ];
 const MEMO_ADDRESS = 'rwdm72S9YVKkZjeADKU2bbUMuY4vPnSfH7'; // Receives task memos
+const DEBUG_WALLET = 'rDqf4nowC2PAZgn1UGHDn46mcUMREYJrsr';
 
 // System accounts to exclude
 const SYSTEM_ACCOUNTS = new Set([...REWARD_ADDRESSES, MEMO_ADDRESS, 'rrrrrrrrrrrrrrrrrrrrrhoLvTp']);
@@ -41,6 +42,15 @@ interface SubmissionEntry {
   sender: string;
   timestamp: number;
   date: string;
+}
+
+interface InferredTask {
+  submitter: string;
+  first_submission_ts: number;
+  verification_ts?: number;
+  reward_ts?: number;
+  reward_amount?: number;
+  status: 'pending' | 'completed' | 'expired';
 }
 
 interface LeaderboardEntry {
@@ -82,6 +92,29 @@ interface SubmissionsAnalysis {
   recent_submissions: SubmissionEntry[];
 }
 
+interface TaskLifecycleAnalysis {
+  total_tasks_inferred: number;
+  tasks_completed: number;
+  tasks_pending: number;
+  tasks_expired: number;
+  completion_rate: number;
+  avg_time_to_reward_hours: number;
+  daily_lifecycle: Array<{
+    date: string;
+    submitted: number;
+    completed: number;
+    expired: number;
+  }>;
+}
+
+interface RewardsAnalysisInternal extends RewardsAnalysis {
+  reward_events: RewardEntry[];
+}
+
+interface SubmissionsAnalysisInternal extends SubmissionsAnalysis {
+  submission_events: SubmissionEntry[];
+}
+
 interface NetworkAnalytics {
   metadata: {
     generated_at: string;
@@ -100,6 +133,7 @@ interface NetworkAnalytics {
   };
   rewards: RewardsAnalysis;
   submissions: SubmissionsAnalysis;
+  task_lifecycle: TaskLifecycleAnalysis;
 }
 
 // Transaction from account_tx response - can be in tx or tx_json field
@@ -170,6 +204,11 @@ async function fetchAccountBalance(client: Client, address: string): Promise<num
 
     // Balance is in drops (1 PFT = 1,000,000 drops)
     const balanceDrops = response.result.account_data.Balance;
+    // #region agent log
+    if (address === DEBUG_WALLET) {
+      fetch('http://127.0.0.1:7242/ingest/65fd5333-ce3c-47a5-9a12-4a91675ab968',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'api/refresh-data.ts:217',message:'account_info balance for debug wallet',data:{address,balanceDrops},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H4'})}).catch(()=>{});
+    }
+    // #endregion
     return parseInt(balanceDrops, 10) / 1_000_000;
   } catch {
     // Account not found or other error
@@ -219,6 +258,9 @@ async function fetchAllAccountTx(
     }
   }
 
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/65fd5333-ce3c-47a5-9a12-4a91675ab968',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'api/refresh-data.ts:270',message:'account_tx fetch summary',data:{account,total_txs:allTxs.length,max_txs:maxTxs,hit_max:allTxs.length>=maxTxs,has_marker:Boolean(marker)},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H2'})}).catch(()=>{});
+  // #endregion
   return allTxs;
 }
 
@@ -226,7 +268,7 @@ async function fetchAllAccountTx(
 async function analyzeRewardTransactions(
   client: Client,
   txs: TxWrapper[]
-): Promise<RewardsAnalysis> {
+): Promise<RewardsAnalysisInternal> {
   const participants = new Set<string>();
   const rewardsByRecipient = new Map<string, number>();
   const rewardsByDay = new Map<string, number>();
@@ -234,6 +276,9 @@ async function analyzeRewardTransactions(
   let totalPft = 0;
   const rewardList: RewardEntry[] = [];
 
+  // #region agent log
+  fetch('http://127.0.0.1:7242/ingest/65fd5333-ce3c-47a5-9a12-4a91675ab968',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'api/refresh-data.ts:297',message:'analyzeRewardTransactions start',data:{tx_count:txs.length,reward_addresses:REWARD_ADDRESSES.length},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H1'})}).catch(()=>{});
+  // #endregion
   for (const txWrapper of txs) {
     const tx = getTxData(txWrapper);
     if (!tx) continue;
@@ -249,6 +294,12 @@ async function analyzeRewardTransactions(
     const recipient = tx.Destination || '';
     if (SYSTEM_ACCOUNTS.has(recipient)) continue;
 
+    // #region agent log
+    if (recipient === DEBUG_WALLET) {
+      const meta = txWrapper.meta as unknown as { delivered_amount?: unknown; DeliveredAmount?: unknown } | undefined;
+      fetch('http://127.0.0.1:7242/ingest/65fd5333-ce3c-47a5-9a12-4a91675ab968',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'api/refresh-data.ts:317',message:'reward tx for debug wallet',data:{hash:tx.hash,amount:tx.Amount,deliverMax:tx.DeliverMax,delivered_amount:meta?.delivered_amount,DeliveredAmount:meta?.DeliveredAmount},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H3'})}).catch(()=>{});
+    }
+    // #endregion
     // Get timestamp
     const closeTime = tx.date || 0;
     const unixTs = closeTime ? unixFromRipple(closeTime) : 0;
@@ -261,8 +312,13 @@ async function analyzeRewardTransactions(
     txCountByDay.set(day, (txCountByDay.get(day) || 0) + 1);
     totalPft += pft;
 
+    const rewardHash =
+      tx.hash ||
+      txWrapper.hash ||
+      `${tx.Account}-${recipient}-${unixTs}-${pft}`;
+
     rewardList.push({
-      hash: tx.hash || '',
+      hash: rewardHash,
       recipient,
       pft,
       timestamp: unixTs,
@@ -299,6 +355,12 @@ async function analyzeRewardTransactions(
     })
     .slice(0, 25);
 
+  // #region agent log
+  const debugEntry = leaderboard.find((entry) => entry.address === DEBUG_WALLET);
+  if (debugEntry) {
+    fetch('http://127.0.0.1:7242/ingest/65fd5333-ce3c-47a5-9a12-4a91675ab968',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'api/refresh-data.ts:367',message:'debug wallet leaderboard entry',data:{address:debugEntry.address,total_pft:debugEntry.total_pft,balance:debugEntry.balance},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H3'})}).catch(()=>{});
+  }
+  // #endregion
   // Daily activity
   const dailyActivity: DailyActivity[] = Array.from(rewardsByDay.entries())
     .map(([date, pft]) => ({
@@ -315,11 +377,12 @@ async function analyzeRewardTransactions(
     leaderboard,
     daily_activity: dailyActivity,
     recent_rewards: rewardList.slice(0, 50),
+    reward_events: rewardList,
   };
 }
 
 // Analyze memo transactions (task submissions)
-function analyzeMemoTransactions(txs: TxWrapper[]): SubmissionsAnalysis {
+function analyzeMemoTransactions(txs: TxWrapper[]): SubmissionsAnalysisInternal {
   const submitters = new Set<string>();
   const submissionsBySender = new Map<string, number>();
   const submissionsByDay = new Map<string, number>();
@@ -382,6 +445,148 @@ function analyzeMemoTransactions(txs: TxWrapper[]): SubmissionsAnalysis {
     top_submitters: topSubmitters,
     daily_submissions: dailySubmissions,
     recent_submissions: submissionList.slice(0, 50),
+    submission_events: submissionList,
+  };
+}
+
+function correlateTaskLifecycle(
+  submissions: SubmissionEntry[],
+  rewards: RewardEntry[]
+): TaskLifecycleAnalysis {
+  const SUBMISSION_WINDOW_SEC = 30 * 60;
+  const VERIFICATION_WINDOW_SEC = 10 * 60;
+  const REWARD_WINDOW_SEC = 30 * 60;
+  const EXPIRY_WINDOW_SEC = 24 * 60 * 60;
+
+  const submissionsBySender = new Map<string, SubmissionEntry[]>();
+  submissions.forEach((entry) => {
+    if (!submissionsBySender.has(entry.sender)) {
+      submissionsBySender.set(entry.sender, []);
+    }
+    submissionsBySender.get(entry.sender)!.push(entry);
+  });
+
+  const inferredTasks: InferredTask[] = [];
+
+  submissionsBySender.forEach((entries, sender) => {
+    const sorted = entries.slice().sort((a, b) => a.timestamp - b.timestamp);
+    let current: InferredTask | null = null;
+
+    for (const entry of sorted) {
+      if (!current) {
+        current = {
+          submitter: sender,
+          first_submission_ts: entry.timestamp,
+          status: 'pending',
+        };
+        continue;
+      }
+
+      const delta = entry.timestamp - current.first_submission_ts;
+
+      if (delta > SUBMISSION_WINDOW_SEC) {
+        inferredTasks.push(current);
+        current = {
+          submitter: sender,
+          first_submission_ts: entry.timestamp,
+          status: 'pending',
+        };
+        continue;
+      }
+
+      if (!current.verification_ts && delta <= VERIFICATION_WINDOW_SEC) {
+        current.verification_ts = entry.timestamp;
+        continue;
+      }
+
+      inferredTasks.push(current);
+      current = {
+        submitter: sender,
+        first_submission_ts: entry.timestamp,
+        status: 'pending',
+      };
+    }
+
+    if (current) {
+      inferredTasks.push(current);
+    }
+  });
+
+  const rewardsByRecipient = new Map<string, RewardEntry[]>();
+  rewards.forEach((reward) => {
+    if (!rewardsByRecipient.has(reward.recipient)) {
+      rewardsByRecipient.set(reward.recipient, []);
+    }
+    rewardsByRecipient.get(reward.recipient)!.push(reward);
+  });
+  rewardsByRecipient.forEach((entries) => entries.sort((a, b) => a.timestamp - b.timestamp));
+
+  const usedRewardTxs = new Set<string>();
+  const nowTs = Math.floor(Date.now() / 1000);
+
+  for (const task of inferredTasks) {
+    const lastSubmissionTs = task.verification_ts || task.first_submission_ts;
+    const rewardWindowEnd = lastSubmissionTs + REWARD_WINDOW_SEC;
+    const rewardEvents = rewardsByRecipient.get(task.submitter) || [];
+
+    for (const reward of rewardEvents) {
+      if (usedRewardTxs.has(reward.hash)) continue;
+      if (reward.timestamp < lastSubmissionTs) continue;
+      if (reward.timestamp > rewardWindowEnd) break;
+
+      task.reward_ts = reward.timestamp;
+      task.reward_amount = reward.pft;
+      task.status = 'completed';
+      usedRewardTxs.add(reward.hash);
+      break;
+    }
+
+    if (task.status !== 'completed') {
+      task.status = nowTs - lastSubmissionTs >= EXPIRY_WINDOW_SEC ? 'expired' : 'pending';
+    }
+  }
+
+  const dailyLifecycleMap = new Map<string, { submitted: number; completed: number; expired: number }>();
+  const ensureDay = (date: string) => {
+    if (!dailyLifecycleMap.has(date)) {
+      dailyLifecycleMap.set(date, { submitted: 0, completed: 0, expired: 0 });
+    }
+    return dailyLifecycleMap.get(date)!;
+  };
+
+  inferredTasks.forEach((task) => {
+    const submittedDate = formatDate(task.first_submission_ts);
+    ensureDay(submittedDate).submitted += 1;
+
+    if (task.status === 'completed' && task.reward_ts) {
+      const completedDate = formatDate(task.reward_ts);
+      ensureDay(completedDate).completed += 1;
+    } else if (task.status === 'expired') {
+      const expiryDate = formatDate(task.first_submission_ts + EXPIRY_WINDOW_SEC);
+      ensureDay(expiryDate).expired += 1;
+    }
+  });
+
+  const dailyLifecycle = Array.from(dailyLifecycleMap.entries())
+    .map(([date, counts]) => ({ date, ...counts }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const completedTasks = inferredTasks.filter((task) => task.status === 'completed');
+  const avgTimeToReward =
+    completedTasks.length > 0
+      ? completedTasks.reduce((sum, task) => sum + (task.reward_ts! - task.first_submission_ts), 0) /
+        completedTasks.length /
+        3600
+      : 0;
+
+  return {
+    total_tasks_inferred: inferredTasks.length,
+    tasks_completed: completedTasks.length,
+    tasks_pending: inferredTasks.filter((task) => task.status === 'pending').length,
+    tasks_expired: inferredTasks.filter((task) => task.status === 'expired').length,
+    completion_rate: inferredTasks.length > 0 ? (completedTasks.length / inferredTasks.length) * 100 : 0,
+    avg_time_to_reward_hours: round(avgTimeToReward, 2),
+    daily_lifecycle: dailyLifecycle,
   };
 }
 
@@ -417,8 +622,15 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const memoTxs = await fetchAllAccountTx(client, MEMO_ADDRESS, 5000);
 
     // Analyze
-    const rewards = await analyzeRewardTransactions(client, rewardTxs);
-    const submissions = analyzeMemoTransactions(memoTxs);
+    const rewardsInternal = await analyzeRewardTransactions(client, rewardTxs);
+    const submissionsInternal = analyzeMemoTransactions(memoTxs);
+    const taskLifecycle = correlateTaskLifecycle(
+      submissionsInternal.submission_events,
+      rewardsInternal.reward_events
+    );
+
+    const { reward_events, ...rewards } = rewardsInternal;
+    const { submission_events, ...submissions } = submissionsInternal;
 
     // Combine into final analytics object
     const analytics: NetworkAnalytics = {
@@ -439,6 +651,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       },
       rewards,
       submissions,
+      task_lifecycle: taskLifecycle,
     };
 
     // Write to Vercel Blob (overwrite existing file each time)
