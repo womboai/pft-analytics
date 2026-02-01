@@ -3,6 +3,7 @@
 export interface NetworkData {
   metadata: {
     generated_at: string;
+    ledger_index: number;
     reward_address: string;
     memo_address: string;
   };

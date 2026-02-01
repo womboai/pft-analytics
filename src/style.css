@@ -590,80 +590,69 @@ body {
   line-height: 1.4;
 }
 
-/* Daily Chart */
-.daily-chart {
-  display: flex;
-  align-items: flex-end;
-  gap: 4px;
-  height: 180px;
-  padding-top: 2rem;
-  padding-bottom: 2.5rem;
-  overflow: visible;
-  position: relative;
-}
-
-.bar-column {
-  flex: 1;
+/* Daily Distribution Table */
+.daily-table {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  height: calc(100% - 2.5rem);
-  position: relative;
+  gap: 0.375rem;
 }
 
-.bar-column .bar {
-  width: 100%;
-  background: var(--accent);
-  border-radius: 2px 2px 0 0;
-  min-height: 2px;
-  margin-top: auto;
-  position: relative;
-  cursor: pointer;
+.daily-row {
+  display: grid;
+  grid-template-columns: 60px 90px 1fr;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-secondary);
+  border-radius: 4px;
   transition: background 0.2s ease;
 }
 
-.bar-column .bar:hover {
-  background: var(--accent-dim);
+.daily-row:hover {
+  background: rgba(255, 255, 255, 0.03);
 }
 
-.bar-column .bar-value {
-  position: absolute;
-  top: -1.25rem;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 0.5rem;
-  font-weight: 600;
-  color: var(--accent);
-  white-space: nowrap;
-  opacity: 0;
-  transition: opacity 0.2s ease;
-  pointer-events: none;
+.daily-row.empty {
+  opacity: 0.5;
 }
 
-.bar-column .bar:hover .bar-value {
-  opacity: 1;
-}
-
-.bar-column .bar-label {
-  position: absolute;
-  bottom: -2rem;
-  left: 50%;
-  transform: translateX(-50%) rotate(-45deg);
-  transform-origin: top left;
-  font-size: 0.625rem;
+.daily-date {
+  font-size: 0.75rem;
+  font-weight: 500;
   color: var(--text-secondary);
   white-space: nowrap;
-  writing-mode: horizontal-tb;
 }
 
-/* Show labels only on odd bars to prevent overlap */
-.bar-column:nth-child(even) .bar-label {
-  visibility: hidden;
+.daily-amount {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--accent);
+  text-align: right;
+  font-family: 'JetBrains Mono', monospace;
 }
 
-.bar-column.empty .bar {
+.daily-amount.empty {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.daily-bar-container {
+  height: 16px;
+  background: var(--bg-primary);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.daily-bar {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  min-width: 0;
+  transition: width 0.3s ease;
+}
+
+.daily-row.empty .daily-bar {
   background: var(--border);
-  opacity: 0.5;
 }
 
 /* Submitters List */
@@ -818,14 +807,22 @@ body {
     grid-template-columns: repeat(2, 1fr);
   }
 
-  .daily-chart {
-    height: 120px;
-    padding-bottom: 1.5rem;
+  .daily-row {
+    grid-template-columns: 50px 70px 1fr;
+    gap: 0.5rem;
+    padding: 0.375rem 0.5rem;
   }
 
-  .bar-column .bar-label {
-    font-size: 0.5rem;
-    bottom: -1.5rem;
+  .daily-date {
+    font-size: 0.625rem;
+  }
+
+  .daily-amount {
+    font-size: 0.75rem;
+  }
+
+  .daily-bar-container {
+    height: 12px;
   }
 
   .derived-metrics {

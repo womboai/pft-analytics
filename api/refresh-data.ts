@@ -82,6 +82,7 @@ interface SubmissionsAnalysis {
 interface NetworkAnalytics {
   metadata: {
     generated_at: string;
+    ledger_index: number;
     reward_address: string;
     memo_address: string;
     reward_txs_fetched: number;
@@ -398,6 +399,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
     client = new Client(RPC_WS_URL);
     await client.connect();
 
+    // Get current ledger index for liveness indicator
+    const ledgerResponse = await client.request({ command: 'ledger_current' });
+    const ledgerIndex = ledgerResponse.result.ledger_current_index;
+
     // Fetch reward transactions
     const rewardTxs = await fetchAllAccountTx(client, REWARD_ADDRESS, 5000);
 
@@ -412,6 +417,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const analytics: NetworkAnalytics = {
       metadata: {
         generated_at: new Date().toISOString(),
+        ledger_index: ledgerIndex,
         reward_address: REWARD_ADDRESS,
         memo_address: MEMO_ADDRESS,
         reward_txs_fetched: rewardTxs.length,

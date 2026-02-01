@@ -101,7 +101,7 @@ function renderDashboard(data: NetworkData) {
     </table>
   `;
 
-  // Daily activity chart with continuous timeline
+  // Daily activity table with continuous timeline (most recent first)
   const rawDailyData = data.rewards.daily_activity;
 
   // Build a continuous 14-day timeline ending today
@@ -109,7 +109,8 @@ function renderDashboard(data: NetworkData) {
   const dateMap = new Map(rawDailyData.map(d => [d.date, d.pft]));
   const continuousData: Array<{ date: string; pft: number }> = [];
 
-  for (let i = 13; i >= 0; i--) {
+  // Build data with most recent first (i=0 is today, i=13 is 13 days ago)
+  for (let i = 0; i <= 13; i++) {
     const date = new Date(today);
     date.setDate(date.getDate() - i);
     const dateStr = date.toISOString().split('T')[0];
@@ -121,23 +122,29 @@ function renderDashboard(data: NetworkData) {
 
   const maxPft = Math.max(...continuousData.map(d => d.pft), 1);
 
+  // Helper to format date as "Jan 31"
+  const formatDateLabel = (dateStr: string) => {
+    const date = new Date(dateStr + 'T00:00:00');
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
+
   const dailyHtml = continuousData.map(d => {
-    const height = d.pft > 0 ? Math.max((d.pft / maxPft) * 100, 2) : 0;
-    const dateLabel = d.date.slice(5); // MM-DD
+    const barWidth = d.pft > 0 ? Math.max((d.pft / maxPft) * 100, 3) : 0;
     const isEmpty = d.pft === 0;
     return `
-      <div class="bar-column${isEmpty ? ' empty' : ''}">
-        <div class="bar" style="height: ${isEmpty ? 2 : height}%">
-          <span class="bar-value">${formatPFT(d.pft)}</span>
+      <div class="daily-row${isEmpty ? ' empty' : ''}">
+        <div class="daily-date">${formatDateLabel(d.date)}</div>
+        <div class="daily-amount${isEmpty ? ' empty' : ''}">${isEmpty ? '0' : formatPFT(d.pft)}</div>
+        <div class="daily-bar-container">
+          <div class="daily-bar" style="width: ${barWidth}%"></div>
         </div>
-        <div class="bar-label">${dateLabel}</div>
       </div>
     `;
   }).join('');
 
   document.getElementById('daily-activity')!.innerHTML = `
     <h2>Daily PFT Distribution (Last 14 Days)</h2>
-    <div class="daily-chart">
+    <div class="daily-table">
       ${dailyHtml}
     </div>
   `;
@@ -188,7 +195,8 @@ function updateTimestamps(data: NetworkData) {
     minute: '2-digit',
     hour12: true
   });
-  document.getElementById('data-timestamp')!.textContent = `Data generated ${formattedDate} at ${formattedTime} from XRPL chain`;
+  const ledgerIndex = data.metadata.ledger_index?.toLocaleString() || 'N/A';
+  document.getElementById('data-timestamp')!.textContent = `Data generated ${formattedDate} at ${formattedTime} • Ledger #${ledgerIndex}`;
 }
 
 // Show refresh indicator
