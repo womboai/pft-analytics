@@ -18,11 +18,14 @@ const RPC_WS_URL = 'wss://rpc.testnet.postfiat.org:6007';
 const RIPPLE_EPOCH = 946684800;
 
 // TaskNode addresses
-const REWARD_ADDRESS = 'rGBKxoTcavpfEso7ASRELZAMcCMqKa8oFk'; // Sends PFT rewards
+const REWARD_ADDRESSES = [
+  'rGBKxoTcavpfEso7ASRELZAMcCMqKa8oFk', // Primary reward wallet
+  'rKt4peDozpRW9zdYGiTZC54DSNU3Af6pQE', // Secondary reward wallet
+];
 const MEMO_ADDRESS = 'rwdm72S9YVKkZjeADKU2bbUMuY4vPnSfH7'; // Receives task memos
 
 // System accounts to exclude
-const SYSTEM_ACCOUNTS = new Set([REWARD_ADDRESS, MEMO_ADDRESS, 'rrrrrrrrrrrrrrrrrrrrrhoLvTp']);
+const SYSTEM_ACCOUNTS = new Set([...REWARD_ADDRESSES, MEMO_ADDRESS, 'rrrrrrrrrrrrrrrrrrrrrhoLvTp']);
 
 // Type definitions
 interface RewardEntry {
@@ -83,7 +86,7 @@ interface NetworkAnalytics {
   metadata: {
     generated_at: string;
     ledger_index: number;
-    reward_address: string;
+    reward_addresses: string[];
     memo_address: string;
     reward_txs_fetched: number;
     memo_txs_fetched: number;
@@ -235,9 +238,9 @@ async function analyzeRewardTransactions(
     const tx = getTxData(txWrapper);
     if (!tx) continue;
 
-    // Only outgoing payments from reward address
+    // Only outgoing payments from reward addresses
     if (tx.TransactionType !== 'Payment') continue;
-    if (tx.Account !== REWARD_ADDRESS) continue;
+    if (!tx.Account || !REWARD_ADDRESSES.includes(tx.Account)) continue;
 
     // Parse PFT amount (DeliverMax is used in newer XRPL, fallback to Amount)
     const pft = parsePftAmount(tx.DeliverMax) ?? parsePftAmount(tx.Amount);
@@ -404,8 +407,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const ledgerResponse = await client.request({ command: 'ledger_current' });
     const ledgerIndex = ledgerResponse.result.ledger_current_index;
 
-    // Fetch reward transactions
-    const rewardTxs = await fetchAllAccountTx(client, REWARD_ADDRESS, 5000);
+    // Fetch reward transactions from ALL reward addresses
+    const rewardTxArrays = await Promise.all(
+      REWARD_ADDRESSES.map((addr) => fetchAllAccountTx(client!, addr, 5000))
+    );
+    const rewardTxs = rewardTxArrays.flat();
 
     // Fetch memo transactions
     const memoTxs = await fetchAllAccountTx(client, MEMO_ADDRESS, 5000);
@@ -419,7 +425,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       metadata: {
         generated_at: new Date().toISOString(),
         ledger_index: ledgerIndex,
-        reward_address: REWARD_ADDRESS,
+        reward_addresses: REWARD_ADDRESSES,
         memo_address: MEMO_ADDRESS,
         reward_txs_fetched: rewardTxs.length,
         memo_txs_fetched: memoTxs.length,
