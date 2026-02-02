@@ -81,10 +81,11 @@ body::after {
 }
 
 .header .data-timestamp {
-  color: var(--text-muted);
-  font-size: 0.625rem;
+  color: var(--text-secondary);
+  font-size: 0.7rem;
   letter-spacing: 0.03em;
   margin-top: 0.25rem;
+  text-shadow: 0 0 6px rgba(0, 255, 0, 0.2);
 }
 
 /* Address Search */
@@ -104,7 +105,7 @@ body::after {
   width: 100%;
   padding: 0.5rem 2rem 0.5rem 0.75rem;
   font-family: 'JetBrains Mono', monospace;
-  font-size: 0.875rem;
+  font-size: 0.9rem;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: 0;
@@ -114,7 +115,7 @@ body::after {
 }
 
 .address-search::placeholder {
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .address-search:focus {
@@ -475,31 +476,65 @@ body::after {
 }
 
 /* Top 3 styling for table rows */
-.leaderboard-table tbody tr.top-1 td:first-child {
-  border-left: 2px solid var(--accent);
-  box-shadow: -2px 0 6px rgba(0, 255, 0, 0.25);
-}
-.leaderboard-table tbody tr.top-2 td:first-child {
-  border-left: 2px solid var(--accent);
-  box-shadow: -2px 0 4px rgba(0, 255, 0, 0.2);
-}
-.leaderboard-table tbody tr.top-3 td:first-child {
-  border-left: 2px solid var(--accent);
-  box-shadow: -2px 0 3px rgba(0, 255, 0, 0.15);
+.leaderboard-table tbody tr.top-1,
+.leaderboard-table tbody tr.top-2,
+.leaderboard-table tbody tr.top-3 {
+  background: var(--bg-secondary);
 }
 
-.leaderboard-table tbody tr.top-1 .rank-cell,
-.leaderboard-table tbody tr.top-2 .rank-cell,
-.leaderboard-table tbody tr.top-3 .rank-cell {
-  color: var(--accent);
+.leaderboard-table tbody tr.top-1 td,
+.leaderboard-table tbody tr.top-2 td,
+.leaderboard-table tbody tr.top-3 td {
+  background: transparent;
+}
+
+.leaderboard-table tbody tr.top-1 {
+  background: linear-gradient(90deg, rgba(255, 215, 0, 0.18), rgba(0, 0, 0, 0));
+  box-shadow: inset 0 0 0 1px rgba(255, 215, 0, 0.35), 0 0 14px rgba(255, 215, 0, 0.15);
+}
+.leaderboard-table tbody tr.top-2 {
+  background: linear-gradient(90deg, rgba(192, 192, 192, 0.18), rgba(0, 0, 0, 0));
+  box-shadow: inset 0 0 0 1px rgba(192, 192, 192, 0.3), 0 0 12px rgba(192, 192, 192, 0.12);
+}
+.leaderboard-table tbody tr.top-3 {
+  background: linear-gradient(90deg, rgba(205, 127, 50, 0.2), rgba(0, 0, 0, 0));
+  box-shadow: inset 0 0 0 1px rgba(205, 127, 50, 0.32), 0 0 12px rgba(205, 127, 50, 0.12);
+}
+
+.leaderboard-table tbody tr.top-1 .rank-cell {
+  color: #ffd700;
   position: relative;
+  text-shadow: 0 0 10px rgba(255, 215, 0, 0.35);
+}
+.leaderboard-table tbody tr.top-2 .rank-cell {
+  color: #c0c0c0;
+  position: relative;
+  text-shadow: 0 0 10px rgba(192, 192, 192, 0.3);
+}
+.leaderboard-table tbody tr.top-3 .rank-cell {
+  color: #cd7f32;
+  position: relative;
+  text-shadow: 0 0 10px rgba(205, 127, 50, 0.3);
 }
 
 .leaderboard-table tbody tr.top-1 .rank-cell::before,
 .leaderboard-table tbody tr.top-2 .rank-cell::before,
 .leaderboard-table tbody tr.top-3 .rank-cell::before {
   content: "> ";
-  opacity: 0.5;
+  opacity: 0.6;
+}
+
+.leaderboard-table tbody tr.top-1:hover {
+  background: linear-gradient(90deg, rgba(255, 215, 0, 0.38), rgba(0, 0, 0, 0));
+  box-shadow: inset 0 0 0 1px rgba(255, 215, 0, 0.65), 0 0 26px rgba(255, 215, 0, 0.35);
+}
+.leaderboard-table tbody tr.top-2:hover {
+  background: linear-gradient(90deg, rgba(192, 192, 192, 0.36), rgba(0, 0, 0, 0));
+  box-shadow: inset 0 0 0 1px rgba(192, 192, 192, 0.6), 0 0 24px rgba(192, 192, 192, 0.3);
+}
+.leaderboard-table tbody tr.top-3:hover {
+  background: linear-gradient(90deg, rgba(205, 127, 50, 0.38), rgba(0, 0, 0, 0));
+  box-shadow: inset 0 0 0 1px rgba(205, 127, 50, 0.6), 0 0 24px rgba(205, 127, 50, 0.3);
 }
 
 /* Search match states for table rows */
@@ -586,16 +621,16 @@ body::after {
 }
 
 .leaderboard-row.top-1 {
-  border-left: 2px solid var(--accent);
-  box-shadow: -2px 0 6px rgba(0, 255, 0, 0.25);
+  background: linear-gradient(90deg, rgba(255, 215, 0, 0.06), rgba(0, 0, 0, 0));
+  box-shadow: inset 0 0 0 1px rgba(255, 215, 0, 0.2);
 }
 .leaderboard-row.top-2 {
-  border-left: 2px solid var(--accent);
-  box-shadow: -2px 0 4px rgba(0, 255, 0, 0.2);
+  background: linear-gradient(90deg, rgba(192, 192, 192, 0.06), rgba(0, 0, 0, 0));
+  box-shadow: inset 0 0 0 1px rgba(192, 192, 192, 0.18);
 }
 .leaderboard-row.top-3 {
-  border-left: 2px solid var(--accent);
-  box-shadow: -2px 0 3px rgba(0, 255, 0, 0.15);
+  background: linear-gradient(90deg, rgba(205, 127, 50, 0.06), rgba(0, 0, 0, 0));
+  box-shadow: inset 0 0 0 1px rgba(205, 127, 50, 0.18);
 }
 
 .leaderboard-row .rank {
@@ -702,6 +737,10 @@ body::after {
 
 .daily-row:hover {
   background: rgba(255, 255, 255, 0.03);
+}
+
+.daily-row:hover .daily-bar {
+  box-shadow: 0 0 8px rgba(0, 255, 0, 0.35);
 }
 
 .daily-row.empty {

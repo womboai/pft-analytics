@@ -278,7 +278,7 @@ async function init() {
 
   app.innerHTML = `
     <header class="header">
-      <h1>PFT Analytics</h1>
+      <h1>PFT Task Node Analytics</h1>
       <p class="data-timestamp" id="data-timestamp"></p>
       <div id="refresh-indicator" class="refresh-indicator">
         <span class="refresh-dot"></span>
