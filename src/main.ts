@@ -11,14 +11,8 @@ let refreshIntervalId: number | null = null;
 // Render all dashboard data to the DOM
 function renderDashboard(data: NetworkData) {
   const totals = data.network_totals;
-  const avgPftPerReward = totals.total_rewards_paid > 0
-    ? totals.total_pft_distributed / totals.total_rewards_paid
-    : 0;
   const successRate = totals.total_submissions > 0
     ? (totals.total_rewards_paid / totals.total_submissions) * 100
-    : 0;
-  const avgPftPerEarner = totals.unique_earners > 0
-    ? totals.total_pft_distributed / totals.unique_earners
     : 0;
 
   // Network metrics (streamlined)
@@ -44,19 +38,7 @@ function renderDashboard(data: NetworkData) {
     </div>
   `;
 
-  // Task lifecycle metrics (with null safety)
-  const lifecycle = data.task_lifecycle || {
-    total_tasks_inferred: 0,
-    tasks_completed: 0,
-    tasks_pending: 0,
-    tasks_expired: 0,
-    completion_rate: 0,
-    avg_time_to_reward_hours: 0,
-    daily_lifecycle: []
-  };
   // Task lifecycle section hidden for now (see WOMBO-715)
-  // const completionRate = lifecycle.completion_rate ?? 0;
-  // const avgTimeToReward = lifecycle.avg_time_to_reward_hours ?? 0;
 
   // Leaderboard - table-based layout with Balance + Earned
   const leaderboardRows = data.rewards.leaderboard.slice(0, 10).map((entry, i) => `
