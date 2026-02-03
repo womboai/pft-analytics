@@ -71,7 +71,7 @@ function renderDashboard(data: NetworkData) {
           ${formatAddress(entry.address)}
           <span class="address-tooltip">${entry.address}</span>
         </span>
-        <a href="https://testnet.xrpl.org/accounts/${entry.address}" target="_blank" rel="noopener noreferrer" class="explorer-link" title="View on XRPL Explorer">↗</a>
+        <a href="https://explorer.testnet.postfiat.org/account/${entry.address}" target="_blank" rel="noopener noreferrer" class="explorer-link" title="View on XRPL Explorer">↗</a>
       </td>
       <td class="balance-cell">${formatPFT(entry.balance)}</td>
       <td class="earned-cell">${formatPFT(entry.total_pft)}</td>
@@ -152,7 +152,7 @@ function renderDashboard(data: NetworkData) {
           ${formatAddress(entry.address)}
           <span class="address-tooltip">${entry.address}</span>
         </span>
-        <a href="https://testnet.xrpl.org/accounts/${entry.address}" target="_blank" rel="noopener noreferrer" class="explorer-link" title="View on XRPL Explorer">↗</a>
+        <a href="https://explorer.testnet.postfiat.org/account/${entry.address}" target="_blank" rel="noopener noreferrer" class="explorer-link" title="View on XRPL Explorer">↗</a>
       </div>
       <div class="count">${entry.submissions}</div>
     </div>
@@ -185,7 +185,10 @@ function updateTimestamps(data: NetworkData) {
   });
   const ledgerIndex = data.metadata.ledger_index;
   const ledgerFormatted = ledgerIndex?.toLocaleString() || 'N/A';
-  document.getElementById('data-timestamp')!.textContent = `${formattedDate} • Ledger #${ledgerFormatted}`;
+  const ledgerLink = ledgerIndex 
+    ? `<a href="https://explorer.testnet.postfiat.org/ledger/${ledgerIndex}" target="_blank" rel="noopener">Ledger #${ledgerFormatted}</a>`
+    : `Ledger #${ledgerFormatted}`;
+  document.getElementById('data-timestamp')!.innerHTML = `${formattedDate} • ${ledgerLink}`;
 }
 
 // Show refresh indicator
