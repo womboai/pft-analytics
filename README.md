@@ -1,165 +1,75 @@
 # PFT Task Node Analytics
 
-Real-time on-chain analytics dashboard for the Post Fiat network.
+On-chain analytics for the [Post Fiat](https://postfiat.org) network — a token economy where humans and AI agents earn PFT by completing tasks.
 
-**[Live Dashboard → pft.w.ai](https://pft.w.ai)**
+**[pft.w.ai →](https://pft.w.ai)**
 
-## Features
+![Dashboard](docs/dashboard-screenshot.png)
 
-- **Real-time Data** — Updates every minute via automated on-chain scanning
-- **Network Metrics** — Total PFT distributed, unique earners, task rewards, success rate
-- **Leaderboard** — Top earners ranked by balance with gold/silver/bronze styling
-- **Explorer Integration** — Click any address or ledger to view on [Post Fiat Explorer](https://explorer.testnet.postfiat.org)
-- **Daily Distribution** — 14-day UTC visualization of PFT rewards activity
-- **Wallet Search** — Find any address with instant rank and earnings lookup
+## What This Shows
 
-## Tech Stack
+- **Network Metrics** — Total PFT distributed, unique earners, success rate
+- **Leaderboard** — Top earners ranked by balance (gold/silver/bronze for top 3)
+- **Daily Distribution** — 14-day bar chart of reward activity (UTC)
+- **Top Submitters** — Most active task submitters
+- **Wallet Search** — Look up any address to see rank and earnings
 
-| Layer | Technology |
-|-------|------------|
-| Frontend | [Vite](https://vitejs.dev/) + TypeScript (vanilla, no framework) |
-| Hosting | [Vercel](https://vercel.com/) (Serverless + Cron + Blob) |
-| Blockchain | Post Fiat L1 (XRPL fork) via WebSocket RPC |
-| Explorer | [explorer.testnet.postfiat.org](https://explorer.testnet.postfiat.org) |
+All data comes directly from the Post Fiat L1 blockchain. Updates every 60 seconds.
 
-## Quick Start
+## Run Locally
 
 ```bash
-# Install dependencies
 npm install
-
-# Run development server
 npm run dev
 ```
 
-The dashboard will be available at `http://localhost:5173`.
+Opens at `http://localhost:5173`. Uses production data by default.
 
-## Architecture
+## How It Works
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        VERCEL CRON                               │
-│                    (every minute)                                │
-└─────────────────────────┬───────────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   SERVERLESS FUNCTION                            │
-│                  /api/refresh-data.ts                            │
-│                                                                  │
-│   1. Connect to Post Fiat RPC via WebSocket                      │
-│   2. Fetch transactions from all reward wallets                  │
-│   3. Compute leaderboard, totals, daily activity                 │
-│   4. Write JSON to Vercel Blob                                   │
-└─────────────────────────┬───────────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      VERCEL BLOB                                 │
-│                    network.json                                  │
-│                                                                  │
-│   Public URL with 60s cache + stale-while-revalidate             │
-└─────────────────────────┬───────────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                       FRONTEND                                   │
-│                     Vite + TypeScript                            │
-│                                                                  │
-│   Static site fetches from Blob URL on load + 60s auto-refresh   │
-└─────────────────────────────────────────────────────────────────┘
-```
+A Vercel cron job runs every minute:
 
-### Data Sources
+1. Connects to Post Fiat RPC (`wss://rpc.testnet.postfiat.org:6007`)
+2. Fetches transactions from reward wallets
+3. Computes totals, leaderboard, daily activity
+4. Writes JSON to Vercel Blob
+5. Frontend fetches from Blob on load + 60s polling
 
-All data is sourced directly from the Post Fiat chain via WebSocket RPC (`wss://rpc.testnet.postfiat.org:6007`):
+### Key Files
 
-| Wallet Type | Address | Purpose |
-|-------------|---------|---------|
-| Reward Wallet (Primary) | `rGBKxoTcavpfEso7ASRELZAMcCMqKa8oFk` | Main PFT reward distribution |
-| Reward Wallet (Secondary) | `rKt4peDozpRW9zdYGiTZC54DSNU3Af6pQE` | Additional reward distribution |
-| Reward Wallet | `rJNwqDPKSkbqDPNoNxbW6C3KCS84ZaQc96` | Additional reward distribution |
-| Reward Relay | `rKddMw1hqMGwfgJvzjbWQHtBQT8hDcZNCP` | Memo-funded reward relay |
-| Memo Wallet | `rwdm72S9YVKkZjeADKU2bbUMuY4vPnSfH7` | Receives task submission pointers (pf.ptr) |
-
-## Project Structure
-
-```
-pft-analytics/
-├── api/
-│   └── refresh-data.ts    # Vercel serverless function (cron job)
-├── src/
-│   ├── main.ts            # Frontend entry point, dashboard rendering
-│   ├── api.ts             # Data fetching utilities
-│   └── style.css          # Terminal-style CSS theme
-├── scripts/               # Debug/analysis scripts
-├── vercel.json            # Vercel config (cron schedule, headers)
-└── index.html             # HTML template with Agentation loader (localhost only)
-```
-
-## Key Files
-
-| File | Purpose |
-|------|---------|
-| `api/refresh-data.ts` | Serverless function that scans chain and writes to Blob |
+| File | What It Does |
+|------|--------------|
+| `api/refresh-data.ts` | Serverless cron job — chain queries → Blob |
 | `src/main.ts` | Dashboard rendering, search, explorer links |
-| `src/style.css` | Terminal aesthetic (black bg, green text, glow effects) |
-| `vercel.json` | Cron schedule (every minute), cache headers |
+| `src/style.css` | Terminal theme (black bg, #00ff00 green) |
 
-## Deployment
+### Tracked Addresses
 
-### Vercel (Recommended)
+| Address | Role |
+|---------|------|
+| `rGBKxoTcavpfEso7ASRELZAMcCMqKa8oFk` | Primary reward wallet |
+| `rKt4peDozpRW9zdYGiTZC54DSNU3Af6pQE` | Secondary reward wallet |
+| `rJNwqDPKSkbqDPNoNxbW6C3KCS84ZaQc96` | Reward wallet |
+| `rKddMw1hqMGwfgJvzjbWQHtBQT8hDcZNCP` | Reward relay |
+| `rwdm72S9YVKkZjeADKU2bbUMuY4vPnSfH7` | Memo wallet (receives pf.ptr submissions) |
 
-1. Fork this repository
+## Deploy Your Own
+
+1. Fork this repo
 2. Import to Vercel
-3. Add environment variables:
-   - `CRON_SECRET` — Optional secret to protect the cron endpoint
-   - `BLOB_READ_WRITE_TOKEN` — Vercel Blob storage token (auto-configured)
-4. Deploy
+3. Set `BLOB_READ_WRITE_TOKEN` (auto-configured by Vercel Blob)
+4. Optional: Set `CRON_SECRET` to protect the cron endpoint
 
-The cron job will automatically run every minute to refresh data.
+Cron runs automatically every minute.
 
-### Local Development
+## Agent Context
 
-```bash
-# Frontend only (uses production Blob data)
-npm run dev
-
-# With serverless functions (for testing refresh)
-npm i -g vercel
-vercel dev
-```
-
-## Metrics Explained
-
-| Metric | Description |
-|--------|-------------|
-| **Total PFT Paid** | Sum of all PFT distributed from reward wallets |
-| **Unique Earners** | Count of distinct addresses that received rewards |
-| **Tasks Rewarded** | Number of reward transactions sent |
-| **Submissions** | Count of `pf.ptr` memo transactions to memo wallet |
-| **Success Rate** | Tasks Rewarded / Submissions × 100 |
-| **Avg Reward** | Total PFT Paid / Tasks Rewarded |
-
-## Contributing
-
-Contributions welcome! The codebase is intentionally simple — vanilla TypeScript, no heavy frameworks.
-
-### Ideas
-
-- [ ] Historical data export (CSV)
-- [ ] WebSocket live updates (replace polling)
-- [ ] Per-wallet task history view
-- [ ] Network health indicators
-
-## For AI Agents
-
-See [CLAUDE.md](CLAUDE.md) for project context and development patterns.
+See [CLAUDE.md](CLAUDE.md) for AI agent development context.
 
 ## License
 
-MIT — see [LICENSE](LICENSE) for details.
+MIT
 
 ---
 
-Built for the [Post Fiat Network](https://postfiat.org/) • [Explorer](https://explorer.testnet.postfiat.org)
+[Post Fiat Network](https://postfiat.org) • [Block Explorer](https://explorer.testnet.postfiat.org)
