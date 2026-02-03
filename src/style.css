@@ -36,20 +36,6 @@ body {
   color: var(--text-primary);
 }
 
-body::after {
-  content: '';
-  position: fixed;
-  inset: 0;
-  background: repeating-linear-gradient(
-    transparent 0px,
-    transparent 2px,
-    rgba(0, 0, 0, 0.3) 2px,
-    rgba(0, 0, 0, 0.3) 3px
-  );
-  pointer-events: none;
-  z-index: 999;
-}
-
 #app {
   max-width: 1200px;
   margin: 0 auto;
