@@ -22,6 +22,7 @@ const REWARD_ADDRESSES = [
   'rGBKxoTcavpfEso7ASRELZAMcCMqKa8oFk', // Primary reward wallet
   'rKt4peDozpRW9zdYGiTZC54DSNU3Af6pQE', // Secondary reward wallet
   'rJNwqDPKSkbqDPNoNxbW6C3KCS84ZaQc96', // Additional reward wallet
+  'rKddMw1hqMGwfgJvzjbWQHtBQT8hDcZNCP', // Memo-funded reward relay (funded by memo addr)
 ];
 const MEMO_ADDRESS = 'rwdm72S9YVKkZjeADKU2bbUMuY4vPnSfH7'; // Receives task memos
 const DEBUG_WALLET = 'rDqf4nowC2PAZgn1UGHDn46mcUMREYJrsr';
