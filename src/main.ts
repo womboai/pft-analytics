@@ -188,7 +188,8 @@ function updateTimestamps(data: NetworkData) {
   const ledgerLink = ledgerIndex 
     ? `<a href="https://explorer.testnet.postfiat.org/ledgers/${ledgerIndex}" target="_blank" rel="noopener">Ledger #${ledgerFormatted}</a>`
     : `Ledger #${ledgerFormatted}`;
-  document.getElementById('data-timestamp')!.innerHTML = `${formattedDate} • ${ledgerLink}`;
+  const githubLink = `<a href="https://github.com/womboai/pft-analytics" target="_blank" rel="noopener">Open Source</a>`;
+  document.getElementById('data-timestamp')!.innerHTML = `${formattedDate} • ${ledgerLink} • ${githubLink}`;
 }
 
 // Show refresh indicator

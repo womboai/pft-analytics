@@ -559,24 +559,28 @@ body {
   text-shadow: 0 0 10px rgba(205, 127, 50, 0.3);
 }
 
-.leaderboard-table tbody tr.top-1 .rank-cell::before,
-.leaderboard-table tbody tr.top-2 .rank-cell::before,
-.leaderboard-table tbody tr.top-3 .rank-cell::before {
-  content: "> ";
-  opacity: 0.6;
+/* Shiny border glow animation for top 3 rows on hover */
+@keyframes border-glow {
+  0%, 100% { box-shadow: inset 0 0 0 1px var(--glow-color), 0 0 12px var(--glow-color); }
+  50% { box-shadow: inset 0 0 0 1px var(--glow-color), 0 0 24px var(--glow-color), 0 0 36px var(--glow-dim); }
 }
 
 .leaderboard-table tbody tr.top-1:hover {
-  background: linear-gradient(90deg, rgba(255, 215, 0, 0.38), rgba(0, 0, 0, 0));
-  box-shadow: inset 0 0 0 1px rgba(255, 215, 0, 0.65), 0 0 26px rgba(255, 215, 0, 0.35);
+  --glow-color: rgba(255, 215, 0, 0.6);
+  --glow-dim: rgba(255, 215, 0, 0.2);
+  animation: border-glow 1.5s ease-in-out infinite;
 }
+
 .leaderboard-table tbody tr.top-2:hover {
-  background: linear-gradient(90deg, rgba(192, 192, 192, 0.36), rgba(0, 0, 0, 0));
-  box-shadow: inset 0 0 0 1px rgba(192, 192, 192, 0.6), 0 0 24px rgba(192, 192, 192, 0.3);
+  --glow-color: rgba(192, 192, 192, 0.55);
+  --glow-dim: rgba(192, 192, 192, 0.2);
+  animation: border-glow 1.5s ease-in-out infinite;
 }
+
 .leaderboard-table tbody tr.top-3:hover {
-  background: linear-gradient(90deg, rgba(205, 127, 50, 0.38), rgba(0, 0, 0, 0));
-  box-shadow: inset 0 0 0 1px rgba(205, 127, 50, 0.6), 0 0 24px rgba(205, 127, 50, 0.3);
+  --glow-color: rgba(205, 127, 50, 0.55);
+  --glow-dim: rgba(205, 127, 50, 0.2);
+  animation: border-glow 1.5s ease-in-out infinite;
 }
 
 /* Search match states for table rows */
