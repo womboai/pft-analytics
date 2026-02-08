@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "monitor:reset": "node scripts/reset_monitor.mjs",
+    "monitor:reset:once": "node scripts/reset_monitor.mjs --once"
   },
   "dependencies": {
     "@vercel/blob": "^2.0.1",

@@ -7,6 +7,9 @@
 
 import { put } from '@vercel/blob';
 import { Client, type AccountTxResponse, type TransactionMetadata } from 'xrpl';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
 // Vercel Serverless Function config - 60 second timeout for XRPL queries
 export const config = {
@@ -114,10 +117,13 @@ interface TaskLifecycleAnalysis {
 
 interface RewardsAnalysisInternal extends RewardsAnalysis {
   reward_events: RewardEntry[];
+  rewards_by_recipient: Map<string, number>;
+  balances_map: Map<string, number>;
 }
 
 interface SubmissionsAnalysisInternal extends SubmissionsAnalysis {
   submission_events: SubmissionEntry[];
+  submissions_by_sender: Map<string, number>;
 }
 
 interface NetworkAnalytics {
@@ -209,11 +215,6 @@ async function fetchAccountBalance(client: Client, address: string): Promise<num
 
     // Balance is in drops (1 PFT = 1,000,000 drops)
     const balanceDrops = response.result.account_data.Balance;
-    // #region agent log
-    if (address === DEBUG_WALLET) {
-      fetch('http://127.0.0.1:7242/ingest/65fd5333-ce3c-47a5-9a12-4a91675ab968',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'api/refresh-data.ts:217',message:'account_info balance for debug wallet',data:{address,balanceDrops},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H4'})}).catch(()=>{});
-    }
-    // #endregion
     return parseInt(balanceDrops, 10) / 1_000_000;
   } catch {
     // Account not found or other error
@@ -263,9 +264,6 @@ async function fetchAllAccountTx(
     }
   }
 
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/65fd5333-ce3c-47a5-9a12-4a91675ab968',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'api/refresh-data.ts:270',message:'account_tx fetch summary',data:{account,total_txs:allTxs.length,max_txs:maxTxs,hit_max:allTxs.length>=maxTxs,has_marker:Boolean(marker)},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H2'})}).catch(()=>{});
-  // #endregion
   return allTxs;
 }
 
@@ -332,9 +330,6 @@ async function analyzeRewardTransactions(
   // Build system accounts set dynamically
   const systemAccounts = new Set([...rewardAddresses, MEMO_ADDRESS, 'rrrrrrrrrrrrrrrrrrrrrhoLvTp']);
 
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/65fd5333-ce3c-47a5-9a12-4a91675ab968',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'api/refresh-data.ts:297',message:'analyzeRewardTransactions start',data:{tx_count:txs.length,reward_addresses:rewardAddresses.length},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H1'})}).catch(()=>{});
-  // #endregion
   for (const txWrapper of txs) {
     const tx = getTxData(txWrapper);
     if (!tx) continue;
@@ -343,14 +338,6 @@ async function analyzeRewardTransactions(
     if (tx.TransactionType !== 'Payment') continue;
     if (!tx.Account || !rewardAddresses.includes(tx.Account)) continue;
 
-    const candidateRecipient = tx.Destination || '';
-    if (candidateRecipient === DEBUG_WALLET) {
-      const meta = txWrapper.meta as unknown as { delivered_amount?: unknown; DeliveredAmount?: unknown } | undefined;
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/65fd5333-ce3c-47a5-9a12-4a91675ab968',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'api/refresh-data.ts:306',message:'debug wallet payment raw fields',data:{hash:tx.hash,amount:tx.Amount,deliverMax:tx.DeliverMax,delivered_amount:meta?.delivered_amount,DeliveredAmount:meta?.DeliveredAmount},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H3'})}).catch(()=>{});
-      // #endregion
-    }
-
     // Parse PFT amount (DeliverMax is used in newer XRPL, fallback to Amount)
     const pft = parsePftAmount(tx.DeliverMax) ?? parsePftAmount(tx.Amount);
     if (pft === null || pft <= 0) continue;
@@ -358,12 +345,6 @@ async function analyzeRewardTransactions(
     const recipient = tx.Destination || '';
     if (systemAccounts.has(recipient)) continue;
 
-    // #region agent log
-    if (recipient === DEBUG_WALLET) {
-      const meta = txWrapper.meta as unknown as { delivered_amount?: unknown; DeliveredAmount?: unknown } | undefined;
-      fetch('http://127.0.0.1:7242/ingest/65fd5333-ce3c-47a5-9a12-4a91675ab968',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'api/refresh-data.ts:317',message:'reward tx for debug wallet',data:{hash:tx.hash,amount:tx.Amount,deliverMax:tx.DeliverMax,delivered_amount:meta?.delivered_amount,DeliveredAmount:meta?.DeliveredAmount},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H3'})}).catch(()=>{});
-    }
-    // #endregion
     // Get timestamp
     const closeTime = tx.date || 0;
     const unixTs = closeTime ? unixFromRipple(closeTime) : 0;
@@ -416,15 +397,8 @@ async function analyzeRewardTransactions(
       // Sort by balance first, then by total_pft
       if (b.balance !== a.balance) return b.balance - a.balance;
       return b.total_pft - a.total_pft;
-    })
-    .slice(0, 25);
+    });
 
-  // #region agent log
-  const debugEntry = leaderboard.find((entry) => entry.address === DEBUG_WALLET);
-  if (debugEntry) {
-    fetch('http://127.0.0.1:7242/ingest/65fd5333-ce3c-47a5-9a12-4a91675ab968',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'api/refresh-data.ts:367',message:'debug wallet leaderboard entry',data:{address:debugEntry.address,total_pft:debugEntry.total_pft,balance:debugEntry.balance},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H3'})}).catch(()=>{});
-  }
-  // #endregion
   // Daily activity
   const dailyActivity: DailyActivity[] = Array.from(rewardsByDay.entries())
     .map(([date, pft]) => ({
@@ -442,6 +416,8 @@ async function analyzeRewardTransactions(
     daily_activity: dailyActivity,
     recent_rewards: rewardList.slice(0, 50),
     reward_events: rewardList,
+    rewards_by_recipient: rewardsByRecipient,
+    balances_map: balances,
   };
 }
 
@@ -495,8 +471,7 @@ function analyzeMemoTransactions(txs: TxWrapper[]): SubmissionsAnalysisInternal 
   // Top submitters
   const topSubmitters: TopSubmitter[] = Array.from(submissionsBySender.entries())
     .map(([address, submissions]) => ({ address, submissions }))
-    .sort((a, b) => b.submissions - a.submissions)
-    .slice(0, 25);
+    .sort((a, b) => b.submissions - a.submissions);
 
   // Daily submissions
   const dailySubmissions: DailySubmission[] = Array.from(submissionsByDay.entries())
@@ -510,6 +485,7 @@ function analyzeMemoTransactions(txs: TxWrapper[]): SubmissionsAnalysisInternal 
     daily_submissions: dailySubmissions,
     recent_submissions: submissionList.slice(0, 50),
     submission_events: submissionList,
+    submissions_by_sender: submissionsBySender,
   };
 }
 
@@ -654,6 +630,174 @@ function correlateTaskLifecycle(
   };
 }
 
+// Pre-reset baseline snapshot (Feb 4, 2026 - ledger 6060472)
+// Transaction history was wiped during XRPL testnet reset Feb 4-6
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const baselineData = JSON.parse(
+  readFileSync(join(__dirname, '..', 'data', 'baseline-pre-reset.json'), 'utf-8')
+) as NetworkAnalytics;
+
+// Merge pre-reset baseline with post-reset live data
+async function mergeWithBaseline(
+  client: Client,
+  postResetRewards: RewardsAnalysisInternal,
+  postResetSubmissions: SubmissionsAnalysisInternal,
+  postResetLifecycle: TaskLifecycleAnalysis,
+): Promise<{
+  rewards: RewardsAnalysis;
+  submissions: SubmissionsAnalysis;
+  taskLifecycle: TaskLifecycleAnalysis;
+  networkTotals: NetworkAnalytics['network_totals'];
+}> {
+  // --- Leaderboard merge ---
+  const mergedRewards = new Map<string, number>();
+  for (const entry of baselineData.rewards.leaderboard) {
+    mergedRewards.set(entry.address, entry.total_pft);
+  }
+  for (const [addr, pft] of postResetRewards.rewards_by_recipient) {
+    mergedRewards.set(addr, (mergedRewards.get(addr) || 0) + pft);
+  }
+
+  // Fetch balances for baseline-only addresses not already fetched
+  const baselineOnlyAddresses = baselineData.rewards.leaderboard
+    .map(e => e.address)
+    .filter(addr => !postResetRewards.balances_map.has(addr));
+
+  const mergedBalances = new Map(postResetRewards.balances_map);
+  const batchSize = 10;
+  for (let i = 0; i < baselineOnlyAddresses.length; i += batchSize) {
+    const batch = baselineOnlyAddresses.slice(i, i + batchSize);
+    const results = await Promise.all(batch.map(addr => fetchAccountBalance(client, addr)));
+    batch.forEach((addr, idx) => mergedBalances.set(addr, results[idx]));
+  }
+
+  const leaderboard: LeaderboardEntry[] = Array.from(mergedRewards.entries())
+    .map(([address, totalPft]) => ({
+      address,
+      total_pft: round(totalPft),
+      balance: round(mergedBalances.get(address) || 0),
+    }))
+    .sort((a, b) => b.balance !== a.balance ? b.balance - a.balance : b.total_pft - a.total_pft)
+    .slice(0, 25);
+
+  // --- Daily activity merge ---
+  const dailyActivityMap = new Map<string, { pft: number; tx_count: number }>();
+  for (const d of baselineData.rewards.daily_activity) {
+    dailyActivityMap.set(d.date, { pft: d.pft, tx_count: d.tx_count });
+  }
+  for (const d of postResetRewards.daily_activity) {
+    const existing = dailyActivityMap.get(d.date);
+    if (existing) {
+      dailyActivityMap.set(d.date, { pft: existing.pft + d.pft, tx_count: existing.tx_count + d.tx_count });
+    } else {
+      dailyActivityMap.set(d.date, { pft: d.pft, tx_count: d.tx_count });
+    }
+  }
+  const daily_activity: DailyActivity[] = Array.from(dailyActivityMap.entries())
+    .map(([date, { pft, tx_count }]) => ({ date, pft: round(pft), tx_count }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  // --- Submissions merge ---
+  const mergedSubmitters = new Map<string, number>();
+  for (const s of baselineData.submissions.top_submitters) {
+    mergedSubmitters.set(s.address, s.submissions);
+  }
+  for (const [addr, count] of postResetSubmissions.submissions_by_sender) {
+    mergedSubmitters.set(addr, (mergedSubmitters.get(addr) || 0) + count);
+  }
+  const top_submitters: TopSubmitter[] = Array.from(mergedSubmitters.entries())
+    .map(([address, submissions]) => ({ address, submissions }))
+    .sort((a, b) => b.submissions - a.submissions)
+    .slice(0, 25);
+
+  const dailySubsMap = new Map<string, number>();
+  for (const d of baselineData.submissions.daily_submissions) {
+    dailySubsMap.set(d.date, d.submissions);
+  }
+  for (const d of postResetSubmissions.daily_submissions) {
+    dailySubsMap.set(d.date, (dailySubsMap.get(d.date) || 0) + d.submissions);
+  }
+  const daily_submissions: DailySubmission[] = Array.from(dailySubsMap.entries())
+    .map(([date, submissions]) => ({ date, submissions }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  // --- Task lifecycle merge ---
+  const dailyLifecycleMap = new Map<string, { submitted: number; completed: number; expired: number }>();
+  for (const d of baselineData.task_lifecycle.daily_lifecycle) {
+    dailyLifecycleMap.set(d.date, { submitted: d.submitted, completed: d.completed, expired: d.expired });
+  }
+  for (const d of postResetLifecycle.daily_lifecycle) {
+    const existing = dailyLifecycleMap.get(d.date);
+    if (existing) {
+      dailyLifecycleMap.set(d.date, {
+        submitted: existing.submitted + d.submitted,
+        completed: existing.completed + d.completed,
+        expired: existing.expired + d.expired,
+      });
+    } else {
+      dailyLifecycleMap.set(d.date, { submitted: d.submitted, completed: d.completed, expired: d.expired });
+    }
+  }
+  const daily_lifecycle = Array.from(dailyLifecycleMap.entries())
+    .map(([date, counts]) => ({ date, ...counts }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const mergedTasksInferred = baselineData.task_lifecycle.total_tasks_inferred + postResetLifecycle.total_tasks_inferred;
+  const mergedTasksCompleted = baselineData.task_lifecycle.tasks_completed + postResetLifecycle.tasks_completed;
+  const mergedTasksPending = postResetLifecycle.tasks_pending;
+  const mergedTasksExpired = baselineData.task_lifecycle.tasks_expired + postResetLifecycle.tasks_expired;
+
+  // --- Network totals ---
+  const baselineEarnerAddrs = new Set(baselineData.rewards.leaderboard.map(e => e.address));
+  const postResetEarnerAddrs = new Set(postResetRewards.rewards_by_recipient.keys());
+  const earnerOverlap = [...baselineEarnerAddrs].filter(a => postResetEarnerAddrs.has(a)).length;
+
+  const baselineSubmitterAddrs = new Set(baselineData.submissions.top_submitters.map(s => s.address));
+  const postResetSubmitterAddrs = new Set(postResetSubmissions.submissions_by_sender.keys());
+  const submitterOverlap = [...baselineSubmitterAddrs].filter(a => postResetSubmitterAddrs.has(a)).length;
+
+  const totalPftDistributed = round(baselineData.network_totals.total_pft_distributed + postResetRewards.total_pft_distributed);
+  const uniqueEarners = baselineData.network_totals.unique_earners + postResetRewards.unique_recipients - earnerOverlap;
+  const totalRewardsPaid = baselineData.network_totals.total_rewards_paid + postResetRewards.total_reward_transactions;
+  const totalSubmissions = baselineData.network_totals.total_submissions + postResetSubmissions.total_submissions;
+  const uniqueSubmitters = baselineData.network_totals.unique_submitters + postResetSubmissions.unique_submitters - submitterOverlap;
+
+  return {
+    rewards: {
+      total_pft_distributed: totalPftDistributed,
+      unique_recipients: uniqueEarners,
+      total_reward_transactions: totalRewardsPaid,
+      leaderboard,
+      daily_activity,
+      recent_rewards: postResetRewards.recent_rewards,
+    },
+    submissions: {
+      total_submissions: totalSubmissions,
+      unique_submitters: uniqueSubmitters,
+      top_submitters,
+      daily_submissions,
+      recent_submissions: postResetSubmissions.recent_submissions,
+    },
+    taskLifecycle: {
+      total_tasks_inferred: mergedTasksInferred,
+      tasks_completed: mergedTasksCompleted,
+      tasks_pending: mergedTasksPending,
+      tasks_expired: mergedTasksExpired,
+      completion_rate: mergedTasksInferred > 0 ? (mergedTasksCompleted / mergedTasksInferred) * 100 : 0,
+      avg_time_to_reward_hours: postResetLifecycle.avg_time_to_reward_hours,
+      daily_lifecycle,
+    },
+    networkTotals: {
+      total_pft_distributed: totalPftDistributed,
+      unique_earners: uniqueEarners,
+      total_rewards_paid: totalRewardsPaid,
+      total_submissions: totalSubmissions,
+      unique_submitters: uniqueSubmitters,
+    },
+  };
+}
+
 // Main handler - using Vercel's API
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
@@ -704,16 +848,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
         const sender = tx.Account || 'unknown';
         incomingBySender.set(sender, (incomingBySender.get(sender) || 0) + pft);
       }
-      const topSenders = Array.from(incomingBySender.entries())
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 5)
-        .map(([sender, total]) => ({ sender, total: round(total) }));
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/65fd5333-ce3c-47a5-9a12-4a91675ab968',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'api/refresh-data.ts:629',message:'debug wallet incoming summary',data:{address:DEBUG_WALLET,total_incoming:round(incomingTotal),unique_senders:incomingBySender.size,top_senders:topSenders,tx_count:debugTxs.length},timestamp:Date.now(),sessionId:'debug-session',runId:'pre-fix',hypothesisId:'H5'})}).catch(()=>{});
-      // #endregion
     }
 
-    // Analyze
+    // Analyze post-reset data
     const rewardsInternal = await analyzeRewardTransactions(client, rewardTxs, allRewardAddresses);
     const submissionsInternal = analyzeMemoTransactions(memoTxs);
     const taskLifecycle = correlateTaskLifecycle(
@@ -721,8 +858,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
       rewardsInternal.reward_events
     );
 
-    const { reward_events, ...rewards } = rewardsInternal;
-    const { submission_events, ...submissions } = submissionsInternal;
+    // Merge pre-reset baseline with post-reset live data
+    const merged = await mergeWithBaseline(client, rewardsInternal, submissionsInternal, taskLifecycle);
 
     // Combine into final analytics object
     const analytics: NetworkAnalytics = {
@@ -734,16 +871,10 @@ export default async function handler(request: VercelRequest, response: VercelRe
         reward_txs_fetched: rewardTxs.length,
         memo_txs_fetched: memoTxs.length,
       },
-      network_totals: {
-        total_pft_distributed: rewards.total_pft_distributed,
-        unique_earners: rewards.unique_recipients,
-        total_rewards_paid: rewards.total_reward_transactions,
-        total_submissions: submissions.total_submissions,
-        unique_submitters: submissions.unique_submitters,
-      },
-      rewards,
-      submissions,
-      task_lifecycle: taskLifecycle,
+      network_totals: merged.networkTotals,
+      rewards: merged.rewards,
+      submissions: merged.submissions,
+      task_lifecycle: merged.taskLifecycle,
     };
 
     // Write to Vercel Blob (overwrite existing file each time)
