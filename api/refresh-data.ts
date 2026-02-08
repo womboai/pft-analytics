@@ -909,6 +909,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
       contentType: 'application/json',
       addRandomSuffix: false,
       allowOverwrite: true,
+      cacheControlMaxAge: 60, // 60s CDN cache — dashboard refreshes every minute
     });
 
     const elapsedMs = Date.now() - startTime;
