@@ -672,12 +672,17 @@ async function mergeWithBaseline(
     batch.forEach((addr, idx) => mergedBalances.set(addr, results[idx]));
   }
 
+  // Use max(scanner_total, balance) for earned — balance is always accurate from chain,
+  // while the scanner may miss rewards sent through unmonitored relay wallets post-reset
   const leaderboard: LeaderboardEntry[] = Array.from(mergedRewards.entries())
-    .map(([address, totalPft]) => ({
-      address,
-      total_pft: round(totalPft),
-      balance: round(mergedBalances.get(address) || 0),
-    }))
+    .map(([address, totalPft]) => {
+      const balance = round(mergedBalances.get(address) || 0);
+      return {
+        address,
+        total_pft: round(Math.max(totalPft, balance)),
+        balance,
+      };
+    })
     .sort((a, b) => b.balance !== a.balance ? b.balance - a.balance : b.total_pft - a.total_pft)
     .slice(0, 25);
 
@@ -757,7 +762,15 @@ async function mergeWithBaseline(
   const postResetSubmitterAddrs = new Set(postResetSubmissions.submissions_by_sender.keys());
   const submitterOverlap = [...baselineSubmitterAddrs].filter(a => postResetSubmitterAddrs.has(a)).length;
 
-  const totalPftDistributed = round(baselineData.network_totals.total_pft_distributed + postResetRewards.total_pft_distributed);
+  // Sum total_pft using max(scanner_earned, balance) for all known addresses
+  let totalPftDistributed = 0;
+  const allAddresses = new Set([...mergedRewards.keys(), ...mergedBalances.keys()]);
+  for (const addr of allAddresses) {
+    const scannerTotal = mergedRewards.get(addr) || 0;
+    const balance = mergedBalances.get(addr) || 0;
+    totalPftDistributed += Math.max(scannerTotal, balance);
+  }
+  totalPftDistributed = round(totalPftDistributed);
   const uniqueEarners = baselineData.network_totals.unique_earners + postResetRewards.unique_recipients - earnerOverlap;
   const totalRewardsPaid = baselineData.network_totals.total_rewards_paid + postResetRewards.total_reward_transactions;
   const totalSubmissions = baselineData.network_totals.total_submissions + postResetSubmissions.total_submissions;
