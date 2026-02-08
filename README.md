@@ -25,11 +25,36 @@ npm run dev
 
 Opens at `http://localhost:5173`. Uses production data by default.
 
+## Testnet Reset Monitor
+
+Use this when you expect a chain reset and want a concrete before/after impact report.
+
+```bash
+# one-time snapshot (good for sanity checks)
+npm run monitor:reset:once
+
+# continuous monitor (default 20s interval)
+npm run monitor:reset
+```
+
+Optional flags:
+
+```bash
+node scripts/reset_monitor.mjs --interval 15 --out-dir ./monitor/reset-window --reset-baseline
+node scripts/reset_monitor.mjs --email-to "you@example.com" --email-account wombo
+```
+
+Outputs:
+- `monitor/reset-monitor/snapshots/*.json` — raw snapshots of balances and ledger index
+- `monitor/reset-monitor/latest.md` — current status
+- `monitor/reset-monitor/incidents/<id>/report.md` — incident impact report (trigger reasons + wallet-level deltas)
+- `monitor/reset-monitor/state.json` — baseline + incident state
+
 ## How It Works
 
 A Vercel cron job runs every minute:
 
-1. Connects to Post Fiat RPC (`wss://rpc.testnet.postfiat.org:6007`)
+1. Connects to Post Fiat RPC (`wss://ws.testnet.postfiat.org`)
 2. Fetches transactions from reward wallets
 3. Computes totals, leaderboard, daily activity
 4. Writes JSON to Vercel Blob

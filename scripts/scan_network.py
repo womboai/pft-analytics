@@ -21,7 +21,7 @@ except ImportError:
     sys.exit(1)
 
 # PFT XRPL testnet RPC
-RPC_WS_URL = "wss://rpc.testnet.postfiat.org:6007"
+RPC_WS_URL = "wss://ws.testnet.postfiat.org"
 RIPPLE_EPOCH = 946684800
 
 # TaskNode addresses

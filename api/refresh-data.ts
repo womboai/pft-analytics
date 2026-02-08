@@ -14,7 +14,7 @@ export const config = {
 };
 
 // Constants
-const RPC_WS_URL = 'wss://rpc.testnet.postfiat.org:6007';
+const RPC_WS_URL = 'wss://ws.testnet.postfiat.org';
 const RIPPLE_EPOCH = 946684800;
 
 // TaskNode addresses
