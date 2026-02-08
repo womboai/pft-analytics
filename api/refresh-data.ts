@@ -651,37 +651,46 @@ async function mergeWithBaseline(
   networkTotals: NetworkAnalytics['network_totals'];
 }> {
   // --- Leaderboard merge ---
-  const mergedRewards = new Map<string, number>();
+  // Build baseline lookup with both earned and balance from snapshot
+  const baselineLookup = new Map<string, { total_pft: number; balance: number }>();
   for (const entry of baselineData.rewards.leaderboard) {
-    mergedRewards.set(entry.address, entry.total_pft);
-  }
-  for (const [addr, pft] of postResetRewards.rewards_by_recipient) {
-    mergedRewards.set(addr, (mergedRewards.get(addr) || 0) + pft);
+    baselineLookup.set(entry.address, { total_pft: entry.total_pft, balance: entry.balance });
   }
 
-  // Fetch balances for baseline-only addresses not already fetched
-  const baselineOnlyAddresses = baselineData.rewards.leaderboard
-    .map(e => e.address)
-    .filter(addr => !postResetRewards.balances_map.has(addr));
+  // All known earning addresses (baseline + post-reset detected)
+  const allEarnerAddresses = new Set([
+    ...baselineData.rewards.leaderboard.map(e => e.address),
+    ...postResetRewards.rewards_by_recipient.keys(),
+  ]);
 
+  // Fetch balances for all addresses (post-reset scanner already fetched some)
   const mergedBalances = new Map(postResetRewards.balances_map);
+  const missingBalanceAddrs = [...allEarnerAddresses].filter(addr => !mergedBalances.has(addr));
   const batchSize = 10;
-  for (let i = 0; i < baselineOnlyAddresses.length; i += batchSize) {
-    const batch = baselineOnlyAddresses.slice(i, i + batchSize);
+  for (let i = 0; i < missingBalanceAddrs.length; i += batchSize) {
+    const batch = missingBalanceAddrs.slice(i, i + batchSize);
     const results = await Promise.all(batch.map(addr => fetchAccountBalance(client, addr)));
     batch.forEach((addr, idx) => mergedBalances.set(addr, results[idx]));
   }
 
-  // Use max(scanner_total, balance) for earned — balance is always accurate from chain,
-  // while the scanner may miss rewards sent through unmonitored relay wallets post-reset
-  const leaderboard: LeaderboardEntry[] = Array.from(mergedRewards.entries())
-    .map(([address, totalPft]) => {
+  // Compute earned for each address:
+  // - Baseline users: baseline_earned + max(0, current_balance - baseline_balance)
+  //   This adds the balance delta (post-reset rewards minus fees) to accurate baseline earned
+  // - New post-reset users: use scanner total (or balance if scanner missed rewards)
+  const leaderboard: LeaderboardEntry[] = [...allEarnerAddresses]
+    .map(address => {
       const balance = round(mergedBalances.get(address) || 0);
-      return {
-        address,
-        total_pft: round(Math.max(totalPft, balance)),
-        balance,
-      };
+      const bl = baselineLookup.get(address);
+      let totalPft: number;
+      if (bl) {
+        const balanceDelta = Math.max(0, balance - bl.balance);
+        totalPft = round(bl.total_pft + balanceDelta);
+      } else {
+        // New user: use higher of scanner-detected or balance
+        const scannerTotal = postResetRewards.rewards_by_recipient.get(address) || 0;
+        totalPft = round(Math.max(scannerTotal, balance));
+      }
+      return { address, total_pft: totalPft, balance };
     })
     .sort((a, b) => b.balance !== a.balance ? b.balance - a.balance : b.total_pft - a.total_pft)
     .slice(0, 25);
@@ -762,13 +771,17 @@ async function mergeWithBaseline(
   const postResetSubmitterAddrs = new Set(postResetSubmissions.submissions_by_sender.keys());
   const submitterOverlap = [...baselineSubmitterAddrs].filter(a => postResetSubmitterAddrs.has(a)).length;
 
-  // Sum total_pft using max(scanner_earned, balance) for all known addresses
+  // Sum earned across all addresses using same formula as leaderboard
   let totalPftDistributed = 0;
-  const allAddresses = new Set([...mergedRewards.keys(), ...mergedBalances.keys()]);
-  for (const addr of allAddresses) {
-    const scannerTotal = mergedRewards.get(addr) || 0;
+  for (const addr of allEarnerAddresses) {
     const balance = mergedBalances.get(addr) || 0;
-    totalPftDistributed += Math.max(scannerTotal, balance);
+    const bl = baselineLookup.get(addr);
+    if (bl) {
+      totalPftDistributed += bl.total_pft + Math.max(0, balance - bl.balance);
+    } else {
+      const scannerTotal = postResetRewards.rewards_by_recipient.get(addr) || 0;
+      totalPftDistributed += Math.max(scannerTotal, balance);
+    }
   }
   totalPftDistributed = round(totalPftDistributed);
   const uniqueEarners = baselineData.network_totals.unique_earners + postResetRewards.unique_recipients - earnerOverlap;
