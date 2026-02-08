@@ -287,10 +287,6 @@ async function init() {
         <h2>Network Metrics</h2>
         <div class="loading">Loading on-chain data...</div>
       </section>
-      <section id="network-health" class="section full-width">
-        <h2>Network Health</h2>
-        <div class="loading">Loading...</div>
-      </section>
       <section id="leaderboard" class="section">
         <h2>Top Earners</h2>
         <div class="loading">Loading...</div>
@@ -301,6 +297,10 @@ async function init() {
       </section>
       <section id="submitters" class="section">
         <h2>Most Active Submitters</h2>
+        <div class="loading">Loading...</div>
+      </section>
+      <section id="network-health" class="section full-width">
+        <h2>Network Health</h2>
         <div class="loading">Loading...</div>
       </section>
     </main>
