@@ -11,7 +11,7 @@ This is a lightweight analytics dashboard that displays live data from the Post 
 - **Frontend**: Vite + TypeScript (vanilla, no React)
 - **Backend**: Vercel Serverless Function (`/api/refresh-data.ts`)
 - **Storage**: Vercel Blob (public JSON file)
-- **Data Source**: XRPL WebSocket RPC (`wss://rpc.testnet.postfiat.org:6007`)
+- **Data Source**: XRPL WebSocket RPC (`wss://ws.testnet.postfiat.org`)
 
 ## Key Files
 
