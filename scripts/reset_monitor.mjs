@@ -627,11 +627,6 @@ async function runStep(context) {
     state.baseline_snapshot_file = snapshotStatePath;
   }
 
-  if (config.resetBaseline) {
-    state.baseline_snapshot_file = snapshotStatePath;
-    state.incident = null;
-  }
-
   const baselineSnapshot = state.baseline_snapshot_file
     ? readJsonMaybe(resolveStatePath(outDir, state.baseline_snapshot_file))
     : null;
@@ -659,7 +654,9 @@ async function runStep(context) {
     const incidentDir = path.join(incidentsDir, state.incident.id);
     ensureDir(incidentDir);
 
-    const incidentBaseline = readJsonMaybe(resolveStatePath(outDir, state.incident.baseline_snapshot_file));
+    const incidentBaseline = state.incident.baseline_snapshot_file
+      ? readJsonMaybe(resolveStatePath(outDir, state.incident.baseline_snapshot_file))
+      : null;
     if (incidentBaseline) {
       const currentReward = snapshot.totals.reward_balance_pft;
       const baselineReward = incidentBaseline.totals.reward_balance_pft;
