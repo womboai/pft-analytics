@@ -60,6 +60,38 @@ function renderDashboard(data: NetworkData) {
     </div>
   `;
 
+  // Network Health panel
+  const health = data.network_health;
+  if (health) {
+    const statusColor = health.endpoint_status === 'online' ? '#00ff00' : '#ff3344';
+    const statusLabel = health.endpoint_status === 'online' ? 'Online' : 'Offline';
+    const latencyColor = health.ws_latency_ms < 500 ? 'accent-green' : health.ws_latency_ms < 2000 ? 'accent-gold' : '';
+    const driftWarning = health.seconds_since_close > 30;
+    const driftColor = driftWarning ? 'accent-gold' : 'accent-green';
+
+    document.getElementById('network-health')!.innerHTML = `
+      <h2>Network Health</h2>
+      <div class="totals-grid">
+        <div class="total-card ${latencyColor}">
+          <div class="value">${health.ws_latency_ms}ms</div>
+          <div class="label">WS Latency</div>
+        </div>
+        <div class="total-card accent-cyan">
+          <div class="value">${health.ledger_index.toLocaleString()}</div>
+          <div class="label">Ledger Index</div>
+        </div>
+        <div class="total-card ${driftColor}">
+          <div class="value">${health.seconds_since_close}s</div>
+          <div class="label">Since Last Close</div>
+        </div>
+        <div class="total-card">
+          <div class="value"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${statusColor};margin-right:6px;box-shadow:0 0 8px ${statusColor};"></span>${statusLabel}</div>
+          <div class="label">Endpoint</div>
+        </div>
+      </div>
+    `;
+  }
+
   // Task lifecycle section hidden for now (see WOMBO-715)
 
   // Leaderboard - table-based layout with Balance + Earned
@@ -254,6 +286,10 @@ async function init() {
       <section id="network-totals" class="section full-width">
         <h2>Network Metrics</h2>
         <div class="loading">Loading on-chain data...</div>
+      </section>
+      <section id="network-health" class="section full-width">
+        <h2>Network Health</h2>
+        <div class="loading">Loading...</div>
       </section>
       <section id="leaderboard" class="section">
         <h2>Top Earners</h2>

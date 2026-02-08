@@ -115,6 +115,16 @@ interface TaskLifecycleAnalysis {
   }>;
 }
 
+interface NetworkHealthMetrics {
+  ws_latency_ms: number;
+  ledger_index: number;
+  ledger_close_time: string;
+  ledger_close_unix: number;
+  seconds_since_close: number;
+  endpoint_status: 'online' | 'offline';
+  endpoint_url: string;
+}
+
 interface RewardsAnalysisInternal extends RewardsAnalysis {
   reward_events: RewardEntry[];
   rewards_by_recipient: Map<string, number>;
@@ -145,6 +155,7 @@ interface NetworkAnalytics {
   rewards: RewardsAnalysis;
   submissions: SubmissionsAnalysis;
   task_lifecycle: TaskLifecycleAnalysis;
+  network_health: NetworkHealthMetrics;
 }
 
 // Transaction from account_tx response - can be in tx or tx_json field
@@ -838,13 +849,28 @@ export default async function handler(request: VercelRequest, response: VercelRe
   let client: Client | null = null;
 
   try {
-    // Connect to XRPL
+    // Connect to XRPL and measure latency
     client = new Client(RPC_WS_URL);
+    const connectStart = Date.now();
     await client.connect();
+    const wsLatencyMs = Date.now() - connectStart;
 
     // Get current ledger index for liveness indicator
     const ledgerResponse = await client.request({ command: 'ledger_current' });
     const ledgerIndex = ledgerResponse.result.ledger_current_index;
+
+    // Fetch server info for ledger close time
+    const serverInfo = await client.request({ command: 'server_info' });
+    const validatedLedger = serverInfo.result.info.validated_ledger as
+      (typeof serverInfo.result.info.validated_ledger & { close_time?: number }) | undefined;
+    const closeTimeRipple = validatedLedger?.close_time;
+    const ledgerCloseTime = closeTimeRipple
+      ? new Date((closeTimeRipple + RIPPLE_EPOCH) * 1000).toISOString()
+      : new Date().toISOString();
+    const ledgerCloseUnix = closeTimeRipple
+      ? closeTimeRipple + RIPPLE_EPOCH
+      : Math.floor(Date.now() / 1000);
+    const secondsSinceClose = Math.floor(Date.now() / 1000) - ledgerCloseUnix;
 
     // Fetch memo transactions first (needed for relay discovery)
     const memoTxs = await fetchAllAccountTx(client, MEMO_ADDRESS, 5000);
@@ -901,6 +927,15 @@ export default async function handler(request: VercelRequest, response: VercelRe
       rewards: merged.rewards,
       submissions: merged.submissions,
       task_lifecycle: merged.taskLifecycle,
+      network_health: {
+        ws_latency_ms: wsLatencyMs,
+        ledger_index: ledgerIndex,
+        ledger_close_time: ledgerCloseTime,
+        ledger_close_unix: ledgerCloseUnix,
+        seconds_since_close: secondsSinceClose,
+        endpoint_status: 'online' as const,
+        endpoint_url: RPC_WS_URL,
+      },
     };
 
     // Write to Vercel Blob (overwrite existing file each time)

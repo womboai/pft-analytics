@@ -36,6 +36,15 @@ export interface NetworkData {
       expired: number;
     }>;
   };
+  network_health: {
+    ws_latency_ms: number;
+    ledger_index: number;
+    ledger_close_time: string;
+    ledger_close_unix: number;
+    seconds_since_close: number;
+    endpoint_status: 'online' | 'offline';
+    endpoint_url: string;
+  };
 }
 
 const DEFAULT_BLOB_URL = 'https://dclwht8rlliznsdz.public.blob.vercel-storage.com/network.json';
