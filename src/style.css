@@ -855,11 +855,18 @@ body {
   background: var(--border);
 }
 
+.daily-row.reset .daily-bar-container {
+  height: auto;
+  overflow: visible;
+  background: none;
+  display: flex;
+  align-items: center;
+}
+
 .reset-label {
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   font-style: italic;
   color: var(--text-muted);
-  padding-left: 4px;
 }
 
 /* Submitters List */
