@@ -855,6 +855,17 @@ body {
   background: var(--border);
 }
 
+.daily-row.reset {
+  opacity: 0.4;
+}
+
+.daily-amount.reset {
+  color: var(--text-muted);
+  font-weight: 400;
+  font-style: italic;
+  font-size: 0.75rem;
+}
+
 /* Submitters List */
 .submitters-list {
   display: flex;
