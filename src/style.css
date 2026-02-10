@@ -855,15 +855,11 @@ body {
   background: var(--border);
 }
 
-.daily-row.reset {
-  opacity: 0.4;
-}
-
-.daily-amount.reset {
-  color: var(--text-muted);
-  font-weight: 400;
-  font-style: italic;
+.reset-label {
   font-size: 0.75rem;
+  font-style: italic;
+  color: var(--text-muted);
+  padding-left: 4px;
 }
 
 /* Submitters List */

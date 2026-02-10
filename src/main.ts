@@ -168,8 +168,8 @@ function renderDashboard(data: NetworkData) {
       return `
         <div class="daily-row reset">
           <div class="daily-date">${formatDateLabel(d.date)}</div>
-          <div class="daily-amount reset">Reset</div>
-          <div class="daily-bar-container"></div>
+          <div class="daily-amount empty">0</div>
+          <div class="daily-bar-container"><span class="reset-label">Reset</span></div>
         </div>
       `;
     }
