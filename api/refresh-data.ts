@@ -19,6 +19,12 @@ export const config = {
 // Constants
 const RPC_WS_URL = 'wss://ws.testnet.postfiat.org';
 const RIPPLE_EPOCH = 946684800;
+const OFFICIAL_LEADERBOARD_URL = 'https://tasknode.postfiat.org/api/leaderboard';
+const TASKNODE_JWT =
+  process.env.PFT_TASKNODE_JWT ||
+  process.env.TASKNODE_JWT ||
+  process.env.TASKNODE_API_TOKEN ||
+  '';
 
 // TaskNode addresses
 // Primary reward wallets (distribute to many users)
@@ -26,6 +32,10 @@ const PRIMARY_REWARD_ADDRESSES = [
   'rGBKxoTcavpfEso7ASRELZAMcCMqKa8oFk', // Primary reward wallet
   'rKt4peDozpRW9zdYGiTZC54DSNU3Af6pQE', // Secondary reward wallet
   'rJNwqDPKSkbqDPNoNxbW6C3KCS84ZaQc96', // Additional reward wallet
+];
+const KNOWN_REWARD_RELAYS = [
+  // Observed in official Task Node wallet feeds as a reward sender (pf.ptr memos).
+  'rKddMw1hqMGwfgJvzjbWQHtBQT8hDcZNCP',
 ];
 
 // Minimum funding threshold to be considered a relay wallet (in PFT)
@@ -144,6 +154,7 @@ interface NetworkAnalytics {
     memo_address: string;
     reward_txs_fetched: number;
     memo_txs_fetched: number;
+    official_leaderboard_rows?: number;
   };
   network_totals: {
     total_pft_distributed: number;
@@ -213,6 +224,50 @@ function parsePftAmount(amount: unknown): number | null {
 
 function round(value: number, decimals: number = 2): number {
   return Math.round(value * Math.pow(10, decimals)) / Math.pow(10, decimals);
+}
+
+async function fetchOfficialMonthlyRewards(): Promise<Map<string, number>> {
+  const result = new Map<string, number>();
+  try {
+    const headers: Record<string, string> = {
+      accept: 'application/json',
+    };
+    if (TASKNODE_JWT) {
+      headers.authorization = `Bearer ${TASKNODE_JWT}`;
+    }
+
+    const response = await fetch(OFFICIAL_LEADERBOARD_URL, {
+      headers,
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const payload = (await response.json()) as { rows?: Array<Record<string, unknown>> };
+    const rows = Array.isArray(payload.rows) ? payload.rows : [];
+    for (const row of rows) {
+      const address = row.wallet_address;
+      const monthlyRaw = row.monthly_rewards;
+      if (typeof address !== 'string' || address.length === 0) {
+        continue;
+      }
+      const monthly =
+        typeof monthlyRaw === 'number'
+          ? monthlyRaw
+          : typeof monthlyRaw === 'string'
+            ? Number(monthlyRaw)
+            : NaN;
+      if (!Number.isFinite(monthly)) {
+        continue;
+      }
+      result.set(address, round(monthly));
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const hint = TASKNODE_JWT ? '' : ' (set PFT_TASKNODE_JWT to enable auth)';
+    console.warn(`Failed to fetch official leaderboard: ${message}${hint}`);
+  }
+  return result;
 }
 
 // Fetch PFT balance (native currency on this XRPL fork)
@@ -655,6 +710,7 @@ async function mergeWithBaseline(
   postResetRewards: RewardsAnalysisInternal,
   postResetSubmissions: SubmissionsAnalysisInternal,
   postResetLifecycle: TaskLifecycleAnalysis,
+  officialMonthlyRewards: Map<string, number>,
 ): Promise<{
   rewards: RewardsAnalysis;
   submissions: SubmissionsAnalysis;
@@ -672,6 +728,7 @@ async function mergeWithBaseline(
   const allEarnerAddresses = new Set([
     ...baselineData.rewards.leaderboard.map(e => e.address),
     ...postResetRewards.rewards_by_recipient.keys(),
+    ...officialMonthlyRewards.keys(),
   ]);
 
   // Fetch balances for all addresses (post-reset scanner already fetched some)
@@ -692,15 +749,17 @@ async function mergeWithBaseline(
     .map(address => {
       const balance = round(mergedBalances.get(address) || 0);
       const bl = baselineLookup.get(address);
-      let totalPft: number;
+      let trackedTotalPft: number;
       if (bl) {
         const balanceDelta = Math.max(0, balance - bl.balance);
-        totalPft = round(bl.total_pft + balanceDelta);
+        trackedTotalPft = round(bl.total_pft + balanceDelta);
       } else {
         // New user: use higher of scanner-detected or balance
         const scannerTotal = postResetRewards.rewards_by_recipient.get(address) || 0;
-        totalPft = round(Math.max(scannerTotal, balance));
+        trackedTotalPft = round(Math.max(scannerTotal, balance));
       }
+      const officialTotalPft = officialMonthlyRewards.get(address);
+      const totalPft = officialTotalPft !== undefined ? round(officialTotalPft) : trackedTotalPft;
       return { address, total_pft: totalPft, balance };
     })
     .sort((a, b) => b.balance !== a.balance ? b.balance - a.balance : b.total_pft - a.total_pft)
@@ -785,17 +844,23 @@ async function mergeWithBaseline(
   // Sum earned across all addresses using same formula as leaderboard
   let totalPftDistributed = 0;
   for (const addr of allEarnerAddresses) {
-    const balance = mergedBalances.get(addr) || 0;
-    const bl = baselineLookup.get(addr);
-    if (bl) {
-      totalPftDistributed += bl.total_pft + Math.max(0, balance - bl.balance);
+    const officialTotal = officialMonthlyRewards.get(addr);
+    if (officialTotal !== undefined) {
+      totalPftDistributed += officialTotal;
     } else {
-      const scannerTotal = postResetRewards.rewards_by_recipient.get(addr) || 0;
-      totalPftDistributed += Math.max(scannerTotal, balance);
+      const balance = mergedBalances.get(addr) || 0;
+      const bl = baselineLookup.get(addr);
+      if (bl) {
+        totalPftDistributed += bl.total_pft + Math.max(0, balance - bl.balance);
+      } else {
+        const scannerTotal = postResetRewards.rewards_by_recipient.get(addr) || 0;
+        totalPftDistributed += Math.max(scannerTotal, balance);
+      }
     }
   }
   totalPftDistributed = round(totalPftDistributed);
-  const uniqueEarners = baselineData.network_totals.unique_earners + postResetRewards.unique_recipients - earnerOverlap;
+  const uniqueEarnersEstimate = baselineData.network_totals.unique_earners + postResetRewards.unique_recipients - earnerOverlap;
+  const uniqueEarners = Math.max(uniqueEarnersEstimate, officialMonthlyRewards.size);
   const totalRewardsPaid = baselineData.network_totals.total_rewards_paid + postResetRewards.total_reward_transactions;
   const totalSubmissions = baselineData.network_totals.total_submissions + postResetSubmissions.total_submissions;
   const uniqueSubmitters = baselineData.network_totals.unique_submitters + postResetSubmissions.unique_submitters - submitterOverlap;
@@ -877,7 +942,9 @@ export default async function handler(request: VercelRequest, response: VercelRe
     
     // Dynamically discover relay wallets funded by memo address
     const relayWallets = await discoverRelayWallets(memoTxs);
-    const allRewardAddresses = [...PRIMARY_REWARD_ADDRESSES, ...relayWallets];
+    const allRewardAddresses = Array.from(
+      new Set([...PRIMARY_REWARD_ADDRESSES, ...KNOWN_REWARD_RELAYS, ...relayWallets])
+    );
     
     // Fetch reward transactions from ALL reward addresses (primary + discovered relays)
     const rewardTxArrays = await Promise.all(
@@ -909,9 +976,16 @@ export default async function handler(request: VercelRequest, response: VercelRe
       submissionsInternal.submission_events,
       rewardsInternal.reward_events
     );
+    const officialMonthlyRewards = await fetchOfficialMonthlyRewards();
 
     // Merge pre-reset baseline with post-reset live data
-    const merged = await mergeWithBaseline(client, rewardsInternal, submissionsInternal, taskLifecycle);
+    const merged = await mergeWithBaseline(
+      client,
+      rewardsInternal,
+      submissionsInternal,
+      taskLifecycle,
+      officialMonthlyRewards
+    );
 
     // Combine into final analytics object
     const analytics: NetworkAnalytics = {
@@ -922,6 +996,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         memo_address: MEMO_ADDRESS,
         reward_txs_fetched: rewardTxs.length,
         memo_txs_fetched: memoTxs.length,
+        official_leaderboard_rows: officialMonthlyRewards.size,
       },
       network_totals: merged.networkTotals,
       rewards: merged.rewards,

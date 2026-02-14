@@ -132,15 +132,16 @@ function renderDashboard(data: NetworkData) {
 
   // XRPL testnet reset window (Feb 4-6, 2026):
   // The baseline snapshot captures transaction history through Feb 4.
-  // The reset wiped on-chain tx history Feb 5-7. Balances were preserved
-  // and the new chain resumed activity on Feb 8. Per-day transaction data
-  // for Feb 5-7 is unrecoverable — only aggregate balance deltas remain.
+  // The reset wiped on-chain tx history Feb 5-7. Balances were preserved.
+  // Per-day transaction data for Feb 5-7 is unrecoverable — only aggregate
+  // balance deltas remain. Any additional missing days are shown as unknown.
   const RESET_WINDOW = { start: '2026-02-05', end: '2026-02-07' };
 
-  // Build a continuous 14-day timeline ending today
+  // Build a continuous 14-day timeline ending today.
+  // Missing days are displayed as unknown rather than hard 0s.
   const today = new Date();
   const dateMap = new Map(rawDailyData.map(d => [d.date, d.pft]));
-  const continuousData: Array<{ date: string; pft: number; isReset: boolean }> = [];
+  const continuousData: Array<{ date: string; pft: number | null; isReset: boolean; isMissing: boolean }> = [];
 
   // Build data with most recent first (i=0 is today, i=13 is 13 days ago)
   for (let i = 0; i <= 13; i++) {
@@ -148,14 +149,16 @@ function renderDashboard(data: NetworkData) {
     date.setDate(date.getDate() - i);
     const dateStr = date.toISOString().split('T')[0];
     const isReset = dateStr >= RESET_WINDOW.start && dateStr <= RESET_WINDOW.end;
+    const hasData = dateMap.has(dateStr);
     continuousData.push({
       date: dateStr,
-      pft: dateMap.get(dateStr) || 0,
+      pft: hasData ? (dateMap.get(dateStr) || 0) : (isReset ? 0 : null),
       isReset,
+      isMissing: !hasData && !isReset,
     });
   }
 
-  const maxPft = Math.max(...continuousData.map(d => d.pft), 1);
+  const maxPft = Math.max(...continuousData.map(d => d.pft ?? 0), 1);
 
   // Helper to format date as "Jan 31" (UTC dates from blockchain)
   const formatDateLabel = (dateStr: string) => {
@@ -173,12 +176,22 @@ function renderDashboard(data: NetworkData) {
         </div>
       `;
     }
-    const barWidth = d.pft > 0 ? Math.max((d.pft / maxPft) * 100, 3) : 0;
-    const isEmpty = d.pft === 0;
+    if (d.isMissing) {
+      return `
+        <div class="daily-row unknown">
+          <div class="daily-date">${formatDateLabel(d.date)}</div>
+          <div class="daily-amount unknown">n/a</div>
+          <div class="daily-bar-container"><span class="unknown-label">No data</span></div>
+        </div>
+      `;
+    }
+    const pft = d.pft ?? 0;
+    const barWidth = pft > 0 ? Math.max((pft / maxPft) * 100, 3) : 0;
+    const isEmpty = pft === 0;
     return `
       <div class="daily-row${isEmpty ? ' empty' : ''}">
         <div class="daily-date">${formatDateLabel(d.date)}</div>
-        <div class="daily-amount${isEmpty ? ' empty' : ''}">${isEmpty ? '0' : formatPFT(d.pft)}</div>
+        <div class="daily-amount${isEmpty ? ' empty' : ''}">${isEmpty ? '0' : formatPFT(pft)}</div>
         <div class="daily-bar-container">
           <div class="daily-bar" style="width: ${barWidth}%"></div>
         </div>

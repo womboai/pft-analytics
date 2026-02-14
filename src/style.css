@@ -816,6 +816,10 @@ body {
   opacity: 0.5;
 }
 
+.daily-row.unknown {
+  opacity: 0.75;
+}
+
 .daily-date {
   font-size: 0.75rem;
   font-weight: 500;
@@ -832,6 +836,11 @@ body {
 }
 
 .daily-amount.empty {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.daily-amount.unknown {
   color: var(--text-muted);
   font-weight: 400;
 }
@@ -864,6 +873,12 @@ body {
 }
 
 .reset-label {
+  font-size: 0.7rem;
+  font-style: italic;
+  color: var(--text-muted);
+}
+
+.unknown-label {
   font-size: 0.7rem;
   font-style: italic;
   color: var(--text-muted);
