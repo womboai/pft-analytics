@@ -1025,6 +1025,12 @@ body {
   color: var(--accent);
 }
 
+.explorer-link.disabled {
+  color: var(--text-muted);
+  opacity: 0.5;
+  cursor: default;
+}
+
 .dev-feed-type {
   font-size: 0.65rem;
   color: var(--text-secondary);

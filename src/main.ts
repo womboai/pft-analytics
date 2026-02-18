@@ -204,22 +204,31 @@ function renderDashboard(data: NetworkData) {
   const devRows = devActivity?.events
     .slice(0, 60)
     .map((entry, index) => {
-      const actorDisplay = formatAddress(entry.actor_login);
       const eventTime = formatRelativeTime(entry.occurred_at);
       const typeLabel = entry.type === 'merged_pr' ? 'Merged PR' : 'Commit';
+      const actorLogin = entry.actor_login || 'unknown';
+      const actorLabel = actorLogin === 'unknown' ? 'Unknown' : `@${formatAddress(actorLogin)}`;
+      const actorProfileUrl = actorLogin === 'unknown' ? null : `https://github.com/${actorLogin}`;
+      const repoLabel = entry.repo_full_name || 'Private Repository';
+      const eventTitle = entry.title || 'Commit activity update';
+      const eventLink = entry.url || null;
       return `
-        <div class="dev-feed-row clickable" data-full-address="${entry.actor_login}" data-event-url="${entry.url}" role="link" tabindex="0" aria-label="Open ${typeLabel}: ${entry.title}">
+        <div class="dev-feed-row ${eventLink ? 'clickable' : ''}" data-full-address="${actorLogin}" data-event-url="${eventLink ?? ''}" role="${eventLink ? 'link' : 'group'}" tabindex="${eventLink ? 0 : -1}" aria-label="${eventLink ? `Open ${typeLabel}: ${eventTitle}` : `${typeLabel} event for ${actorLabel} (no artifact link)`}">
           <div class="dev-feed-header">
             <div class="dev-feed-rank">#${index + 1}</div>
-            <a href="https://github.com/${entry.actor_login}" target="_blank" rel="noopener noreferrer" class="dev-feed-author" title="Open GitHub profile">
-              @${actorDisplay}
-            </a>
+            ${actorProfileUrl
+              ? `<a href="${actorProfileUrl}" target="_blank" rel="noopener noreferrer" class="dev-feed-author" title="Open GitHub profile">${actorLabel}</a>`
+              : `<span class="dev-feed-author" title="Unknown author">${actorLabel}</span>`
+            }
             <span class="dev-feed-type ${entry.type}">${typeLabel}</span>
-            <a href="${entry.url}" target="_blank" rel="noopener noreferrer" class="explorer-link" title="Open event">↗</a>
+            ${eventLink
+              ? `<a href="${eventLink}" target="_blank" rel="noopener noreferrer" class="explorer-link" title="Open event">↗</a>`
+              : `<span class="explorer-link disabled" title="No artifact link available">↗</span>`
+            }
           </div>
-          <div class="dev-feed-title" title="${entry.title}">${entry.title}</div>
+          <div class="dev-feed-title" title="${eventTitle}">${eventTitle}</div>
           <div class="dev-feed-meta">
-            <span>${entry.repo_full_name}</span>
+            <span>${repoLabel}</span>
             <span>${eventTime}</span>
             ${entry.pr_number ? `<span>PR #${entry.pr_number}</span>` : ''}
           </div>
