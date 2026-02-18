@@ -17,8 +17,21 @@ export const config = {
 };
 
 // Constants
-const RPC_WS_URL = 'wss://ws.testnet.postfiat.org';
+const ARCHIVE_RPC_WS_URL = 'wss://ws-archive.testnet.postfiat.org';
+const LIVE_RPC_WS_URL = 'wss://ws.testnet.postfiat.org';
+const RPC_WS_URL = process.env.PFT_RPC_WS_URL || ARCHIVE_RPC_WS_URL;
 const RIPPLE_EPOCH = 946684800;
+const OFFICIAL_LEADERBOARD_URL = 'https://tasknode.postfiat.org/api/leaderboard';
+const TASKNODE_JWT =
+  process.env.PFT_TASKNODE_JWT ||
+  process.env.TASKNODE_JWT ||
+  process.env.TASKNODE_API_TOKEN ||
+  '';
+const DEFAULT_NETWORK_DATA_URL =
+  'https://dclwht8rlliznsdz.public.blob.vercel-storage.com/network.json';
+const NETWORK_DATA_URL = process.env.PFT_NETWORK_DATA_URL || DEFAULT_NETWORK_DATA_URL;
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 // TaskNode addresses
 // Primary reward wallets (distribute to many users)
@@ -27,9 +40,20 @@ const PRIMARY_REWARD_ADDRESSES = [
   'rKt4peDozpRW9zdYGiTZC54DSNU3Af6pQE', // Secondary reward wallet
   'rJNwqDPKSkbqDPNoNxbW6C3KCS84ZaQc96', // Additional reward wallet
 ];
+const KNOWN_REWARD_RELAYS = [
+  // Observed in official Task Node wallet feeds as a reward sender (pf.ptr memos).
+  'rKddMw1hqMGwfgJvzjbWQHtBQT8hDcZNCP',
+];
 
 // Minimum funding threshold to be considered a relay wallet (in PFT)
 const RELAY_FUNDING_THRESHOLD = 10000;
+const RELAY_BEHAVIOR_LOOKBACK_DAYS = 30;
+const RELAY_BEHAVIOR_MIN_MEMO_FUNDING_PFT = 100;
+const RELAY_BEHAVIOR_MIN_PTR_TXS = 3;
+const RELAY_BEHAVIOR_MIN_UNIQUE_RECIPIENTS = 2;
+const RELAY_BEHAVIOR_MIN_TOTAL_PFT = 100;
+const RELAY_BEHAVIOR_CANDIDATE_SCAN_LIMIT = 60;
+const RELAY_BEHAVIOR_TX_FETCH_LIMIT = 2000;
 const MEMO_ADDRESS = 'rwdm72S9YVKkZjeADKU2bbUMuY4vPnSfH7'; // Receives task memos
 const DEBUG_WALLET = 'rDqf4nowC2PAZgn1UGHDn46mcUMREYJrsr';
 
@@ -59,6 +83,15 @@ interface InferredTask {
   reward_ts?: number;
   reward_amount?: number;
   status: 'pending' | 'completed' | 'expired';
+}
+
+interface RelayBehaviorMatch {
+  address: string;
+  ptr_tx_count: number;
+  unique_recipients: number;
+  total_pft: number;
+  last_ptr_reward_date: string | null;
+  memo_funding_total_pft: number;
 }
 
 interface LeaderboardEntry {
@@ -129,6 +162,10 @@ interface RewardsAnalysisInternal extends RewardsAnalysis {
   reward_events: RewardEntry[];
   rewards_by_recipient: Map<string, number>;
   balances_map: Map<string, number>;
+  excluded_non_ptr_reward_txs: number;
+  excluded_non_ptr_reward_pft: number;
+  non_task_daily_activity: DailyActivity[];
+  non_task_recent_distributions: RewardEntry[];
 }
 
 interface SubmissionsAnalysisInternal extends SubmissionsAnalysis {
@@ -144,6 +181,15 @@ interface NetworkAnalytics {
     memo_address: string;
     reward_txs_fetched: number;
     memo_txs_fetched: number;
+    official_leaderboard_rows?: number;
+    historical_daily_rows?: number;
+    excluded_non_ptr_reward_txs?: number;
+    excluded_non_ptr_reward_pft?: number;
+    relay_wallets_discovered_funding?: string[];
+    relay_wallets_discovered_behavior?: string[];
+    relay_behavior_candidates_scanned?: number;
+    relay_behavior_lookback_days?: number;
+    relay_behavior_matches?: RelayBehaviorMatch[];
   };
   network_totals: {
     total_pft_distributed: number;
@@ -153,9 +199,41 @@ interface NetworkAnalytics {
     unique_submitters: number;
   };
   rewards: RewardsAnalysis;
+  non_task_distributions: {
+    total_pft_distributed: number;
+    total_transactions: number;
+    daily_activity: DailyActivity[];
+    recent_distributions: RewardEntry[];
+  };
   submissions: SubmissionsAnalysis;
   task_lifecycle: TaskLifecycleAnalysis;
   network_health: NetworkHealthMetrics;
+}
+
+async function connectClientWithFallback(): Promise<{ client: Client; endpoint: string }> {
+  const candidates = Array.from(
+    new Set([RPC_WS_URL, ARCHIVE_RPC_WS_URL, LIVE_RPC_WS_URL].filter(Boolean))
+  );
+
+  let lastError: unknown = null;
+  for (const endpoint of candidates) {
+    const candidate = new Client(endpoint);
+    try {
+      await candidate.connect();
+      return { client: candidate, endpoint };
+    } catch (error) {
+      lastError = error;
+      if (candidate.isConnected()) {
+        await candidate.disconnect();
+      }
+    }
+  }
+
+  throw new Error(
+    `Unable to connect to any XRPL endpoint (${candidates.join(', ')}): ${
+      lastError instanceof Error ? lastError.message : String(lastError)
+    }`
+  );
 }
 
 // Transaction from account_tx response - can be in tx or tx_json field
@@ -211,8 +289,174 @@ function parsePftAmount(amount: unknown): number | null {
   return null;
 }
 
+function hasPfPtrMemo(tx: TxData): boolean {
+  const memos = tx.Memos || [];
+  return memos.some((m) => {
+    const memoType = m.Memo?.MemoType || '';
+    return memoType.toLowerCase().includes('70662e707472');
+  });
+}
+
 function round(value: number, decimals: number = 2): number {
   return Math.round(value * Math.pow(10, decimals)) / Math.pow(10, decimals);
+}
+
+function normalizeDailyActivity(input: unknown): DailyActivity[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+
+  const daily: DailyActivity[] = [];
+  for (const entry of input) {
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+    const row = entry as { date?: unknown; pft?: unknown; tx_count?: unknown };
+    if (typeof row.date !== 'string' || !ISO_DATE_RE.test(row.date)) {
+      continue;
+    }
+
+    const pftRaw = typeof row.pft === 'number' ? row.pft : Number(row.pft);
+    const txRaw = typeof row.tx_count === 'number' ? row.tx_count : Number(row.tx_count);
+    if (!Number.isFinite(pftRaw) || !Number.isFinite(txRaw)) {
+      continue;
+    }
+
+    daily.push({
+      date: row.date,
+      pft: round(Math.max(0, pftRaw)),
+      tx_count: Math.max(0, Math.round(txRaw)),
+    });
+  }
+
+  return daily.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function mergeDailyActivityHistory(existing: DailyActivity[], latest: DailyActivity[]): DailyActivity[] {
+  const merged = new Map<string, { pft: number; tx_count: number }>();
+
+  for (const d of existing) {
+    merged.set(d.date, { pft: d.pft, tx_count: d.tx_count });
+  }
+
+  for (const d of latest) {
+    // For any date present in the latest chain scan, trust latest values.
+    // This allows same-day corrections and avoids permanently inflating days
+    // when earlier scans had temporary overcounts.
+    merged.set(d.date, { pft: round(d.pft), tx_count: d.tx_count });
+  }
+
+  return Array.from(merged.entries())
+    .map(([date, stats]) => ({ date, pft: round(stats.pft), tx_count: stats.tx_count }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function fillDailyActivityGaps(rows: DailyActivity[]): DailyActivity[] {
+  if (rows.length === 0) {
+    return [];
+  }
+
+  const sorted = rows.slice().sort((a, b) => a.date.localeCompare(b.date));
+  const byDate = new Map(sorted.map((row) => [row.date, row]));
+  const start = new Date(`${sorted[0].date}T00:00:00.000Z`).getTime();
+  const end = new Date(`${sorted[sorted.length - 1].date}T00:00:00.000Z`).getTime();
+  const filled: DailyActivity[] = [];
+
+  for (let ts = start; ts <= end; ts += DAY_MS) {
+    const date = new Date(ts).toISOString().slice(0, 10);
+    const row = byDate.get(date);
+    filled.push(
+      row || {
+        date,
+        pft: 0,
+        tx_count: 0,
+      }
+    );
+  }
+
+  return filled;
+}
+
+async function fetchHistoricalDailyActivity(): Promise<DailyActivity[]> {
+  try {
+    const historyUrl = new URL(NETWORK_DATA_URL);
+    historyUrl.searchParams.set('history_ts', Date.now().toString());
+
+    const response = await fetch(historyUrl.toString(), { cache: 'no-store' });
+    if (!response.ok) {
+      return [];
+    }
+
+    const payload = (await response.json()) as { rewards?: { daily_activity?: unknown } };
+    return normalizeDailyActivity(payload?.rewards?.daily_activity);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`Failed to fetch historical daily activity: ${message}`);
+    return [];
+  }
+}
+
+async function fetchHistoricalNonTaskDailyActivity(): Promise<DailyActivity[]> {
+  try {
+    const historyUrl = new URL(NETWORK_DATA_URL);
+    historyUrl.searchParams.set('history_ts', Date.now().toString());
+
+    const response = await fetch(historyUrl.toString(), { cache: 'no-store' });
+    if (!response.ok) {
+      return [];
+    }
+
+    const payload = (await response.json()) as { non_task_distributions?: { daily_activity?: unknown } };
+    return normalizeDailyActivity(payload?.non_task_distributions?.daily_activity);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`Failed to fetch historical non-task daily activity: ${message}`);
+    return [];
+  }
+}
+
+async function fetchOfficialMonthlyRewards(): Promise<Map<string, number>> {
+  const result = new Map<string, number>();
+  try {
+    const headers: Record<string, string> = {
+      accept: 'application/json',
+    };
+    if (TASKNODE_JWT) {
+      headers.authorization = `Bearer ${TASKNODE_JWT}`;
+    }
+
+    const response = await fetch(OFFICIAL_LEADERBOARD_URL, {
+      headers,
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const payload = (await response.json()) as { rows?: Array<Record<string, unknown>> };
+    const rows = Array.isArray(payload.rows) ? payload.rows : [];
+    for (const row of rows) {
+      const address = row.wallet_address;
+      const monthlyRaw = row.monthly_rewards;
+      if (typeof address !== 'string' || address.length === 0) {
+        continue;
+      }
+      const monthly =
+        typeof monthlyRaw === 'number'
+          ? monthlyRaw
+          : typeof monthlyRaw === 'string'
+            ? Number(monthlyRaw)
+            : NaN;
+      if (!Number.isFinite(monthly)) {
+        continue;
+      }
+      result.set(address, round(monthly));
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const hint = TASKNODE_JWT ? '' : ' (set PFT_TASKNODE_JWT to enable auth)';
+    console.warn(`Failed to fetch official leaderboard: ${message}${hint}`);
+  }
+  return result;
 }
 
 // Fetch PFT balance (native currency on this XRPL fork)
@@ -325,6 +569,115 @@ async function discoverRelayWallets(memoTxs: TxWrapper[]): Promise<string[]> {
   return relayWallets;
 }
 
+async function discoverBehaviorRelayWallets(
+  client: Client,
+  memoTxs: TxWrapper[],
+  knownRewardSenders: string[]
+): Promise<{ scanned_candidates: number; matches: RelayBehaviorMatch[] }> {
+  const fundedByMemo = new Map<string, { total_pft: number; last_funded_ripple: number }>();
+  const known = new Set([
+    ...knownRewardSenders,
+    ...TREASURY_WALLETS,
+    MEMO_ADDRESS,
+    'rrrrrrrrrrrrrrrrrrrrrhoLvTp',
+  ]);
+
+  for (const txWrapper of memoTxs) {
+    const tx = getTxData(txWrapper);
+    if (!tx) continue;
+    if (tx.TransactionType !== 'Payment') continue;
+    if (tx.Account !== MEMO_ADDRESS) continue;
+
+    const pft = parsePftAmount(tx.DeliverMax) ?? parsePftAmount(tx.Amount);
+    if (pft === null || pft <= 0) continue;
+
+    const recipient = tx.Destination || '';
+    if (!recipient || known.has(recipient)) continue;
+
+    const prev = fundedByMemo.get(recipient) || { total_pft: 0, last_funded_ripple: 0 };
+    fundedByMemo.set(recipient, {
+      total_pft: prev.total_pft + pft,
+      last_funded_ripple: Math.max(prev.last_funded_ripple, tx.date || 0),
+    });
+  }
+
+  const candidates = Array.from(fundedByMemo.entries())
+    .filter(([, stats]) => stats.total_pft >= RELAY_BEHAVIOR_MIN_MEMO_FUNDING_PFT)
+    .sort((a, b) => {
+      if (b[1].total_pft !== a[1].total_pft) return b[1].total_pft - a[1].total_pft;
+      return b[1].last_funded_ripple - a[1].last_funded_ripple;
+    })
+    .slice(0, RELAY_BEHAVIOR_CANDIDATE_SCAN_LIMIT)
+    .map(([address]) => address);
+
+  const lookbackSeconds = RELAY_BEHAVIOR_LOOKBACK_DAYS * 24 * 60 * 60;
+  const nowRipple = Math.floor(Date.now() / 1000) - RIPPLE_EPOCH;
+  const cutoffRipple = nowRipple - lookbackSeconds;
+  const nonRewardSystemAccounts = new Set([
+    ...knownRewardSenders,
+    ...TREASURY_WALLETS,
+    MEMO_ADDRESS,
+    'rrrrrrrrrrrrrrrrrrrrrhoLvTp',
+  ]);
+
+  const matches: RelayBehaviorMatch[] = [];
+
+  for (const address of candidates) {
+    const txs = await fetchAllAccountTx(client, address, RELAY_BEHAVIOR_TX_FETCH_LIMIT);
+    let ptrTxCount = 0;
+    let totalPft = 0;
+    let lastPtrRipple = 0;
+    const uniqueRecipients = new Set<string>();
+
+    for (const txWrapper of txs) {
+      const tx = getTxData(txWrapper);
+      if (!tx) continue;
+      if (tx.TransactionType !== 'Payment') continue;
+      if (tx.Account !== address) continue;
+      if (!tx.date || tx.date < cutoffRipple) continue;
+
+      const pft = parsePftAmount(tx.DeliverMax) ?? parsePftAmount(tx.Amount);
+      if (pft === null || pft <= 0) continue;
+      if (!hasPfPtrMemo(tx)) continue;
+
+      const recipient = tx.Destination || '';
+      if (!recipient || recipient === address) continue;
+      if (nonRewardSystemAccounts.has(recipient)) continue;
+
+      ptrTxCount += 1;
+      totalPft += pft;
+      uniqueRecipients.add(recipient);
+      lastPtrRipple = Math.max(lastPtrRipple, tx.date);
+    }
+
+    if (
+      ptrTxCount >= RELAY_BEHAVIOR_MIN_PTR_TXS &&
+      uniqueRecipients.size >= RELAY_BEHAVIOR_MIN_UNIQUE_RECIPIENTS &&
+      totalPft >= RELAY_BEHAVIOR_MIN_TOTAL_PFT
+    ) {
+      matches.push({
+        address,
+        ptr_tx_count: ptrTxCount,
+        unique_recipients: uniqueRecipients.size,
+        total_pft: round(totalPft),
+        last_ptr_reward_date: lastPtrRipple ? formatDate(unixFromRipple(lastPtrRipple)) : null,
+        memo_funding_total_pft: round(fundedByMemo.get(address)?.total_pft || 0),
+      });
+    }
+  }
+
+  matches.sort((a, b) => {
+    if (b.ptr_tx_count !== a.ptr_tx_count) return b.ptr_tx_count - a.ptr_tx_count;
+    if (b.unique_recipients !== a.unique_recipients) return b.unique_recipients - a.unique_recipients;
+    return b.total_pft - a.total_pft;
+  });
+
+  return {
+    scanned_candidates: candidates.length,
+    matches,
+  };
+}
+
 // Analyze reward transactions
 async function analyzeRewardTransactions(
   client: Client,
@@ -335,8 +688,14 @@ async function analyzeRewardTransactions(
   const rewardsByRecipient = new Map<string, number>();
   const rewardsByDay = new Map<string, number>();
   const txCountByDay = new Map<string, number>();
+  const nonTaskByDay = new Map<string, number>();
+  const nonTaskTxCountByDay = new Map<string, number>();
+  const seenRewardHashes = new Set<string>();
   let totalPft = 0;
+  let excludedNonPtrPft = 0;
+  let excludedNonPtrTxs = 0;
   const rewardList: RewardEntry[] = [];
+  const nonTaskList: RewardEntry[] = [];
   
   // Build system accounts set dynamically
   const systemAccounts = new Set([...rewardAddresses, MEMO_ADDRESS, 'rrrrrrrrrrrrrrrrrrrrrhoLvTp']);
@@ -356,10 +715,32 @@ async function analyzeRewardTransactions(
     const recipient = tx.Destination || '';
     if (systemAccounts.has(recipient)) continue;
 
+    const rewardHash =
+      tx.hash ||
+      txWrapper.hash ||
+      `${tx.Account}-${recipient}-${tx.date || 0}-${tx.DeliverMax || tx.Amount || 'unknown'}`;
+    if (seenRewardHashes.has(rewardHash)) continue;
+    seenRewardHashes.add(rewardHash);
+
     // Get timestamp
     const closeTime = tx.date || 0;
     const unixTs = closeTime ? unixFromRipple(closeTime) : 0;
     const day = unixTs ? formatDate(unixTs) : 'unknown';
+
+    if (!hasPfPtrMemo(tx)) {
+      excludedNonPtrPft += pft;
+      excludedNonPtrTxs += 1;
+      nonTaskByDay.set(day, (nonTaskByDay.get(day) || 0) + pft);
+      nonTaskTxCountByDay.set(day, (nonTaskTxCountByDay.get(day) || 0) + 1);
+      nonTaskList.push({
+        hash: rewardHash,
+        recipient,
+        pft,
+        timestamp: unixTs,
+        date: day,
+      });
+      continue;
+    }
 
     // Aggregate
     participants.add(recipient);
@@ -367,11 +748,6 @@ async function analyzeRewardTransactions(
     rewardsByDay.set(day, (rewardsByDay.get(day) || 0) + pft);
     txCountByDay.set(day, (txCountByDay.get(day) || 0) + 1);
     totalPft += pft;
-
-    const rewardHash =
-      tx.hash ||
-      txWrapper.hash ||
-      `${tx.Account}-${recipient}-${unixTs}-${pft}`;
 
     rewardList.push({
       hash: rewardHash,
@@ -418,6 +794,13 @@ async function analyzeRewardTransactions(
       tx_count: txCountByDay.get(date) || 0,
     }))
     .sort((a, b) => a.date.localeCompare(b.date));
+  const nonTaskDailyActivity: DailyActivity[] = Array.from(nonTaskByDay.entries())
+    .map(([date, pft]) => ({
+      date,
+      pft: round(pft),
+      tx_count: nonTaskTxCountByDay.get(date) || 0,
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
 
   return {
     total_pft_distributed: round(totalPft),
@@ -429,6 +812,10 @@ async function analyzeRewardTransactions(
     reward_events: rewardList,
     rewards_by_recipient: rewardsByRecipient,
     balances_map: balances,
+    excluded_non_ptr_reward_txs: excludedNonPtrTxs,
+    excluded_non_ptr_reward_pft: round(excludedNonPtrPft),
+    non_task_daily_activity: nonTaskDailyActivity,
+    non_task_recent_distributions: nonTaskList.slice(0, 50),
   };
 }
 
@@ -437,6 +824,7 @@ function analyzeMemoTransactions(txs: TxWrapper[]): SubmissionsAnalysisInternal 
   const submitters = new Set<string>();
   const submissionsBySender = new Map<string, number>();
   const submissionsByDay = new Map<string, number>();
+  const seenSubmissionHashes = new Set<string>();
   let totalSubmissions = 0;
   const submissionList: SubmissionEntry[] = [];
 
@@ -447,6 +835,10 @@ function analyzeMemoTransactions(txs: TxWrapper[]): SubmissionsAnalysisInternal 
     // Only incoming payments to memo address
     if (tx.TransactionType !== 'Payment') continue;
     if (tx.Destination !== MEMO_ADDRESS) continue;
+
+    const submissionHash = tx.hash || txWrapper.hash || '';
+    if (submissionHash && seenSubmissionHashes.has(submissionHash)) continue;
+    if (submissionHash) seenSubmissionHashes.add(submissionHash);
 
     const sender = tx.Account || '';
     if (BASE_SYSTEM_ACCOUNTS.has(sender)) continue;
@@ -472,7 +864,7 @@ function analyzeMemoTransactions(txs: TxWrapper[]): SubmissionsAnalysisInternal 
     totalSubmissions++;
 
     submissionList.push({
-      hash: tx.hash || '',
+      hash: submissionHash,
       sender,
       timestamp: unixTs,
       date: day,
@@ -655,6 +1047,8 @@ async function mergeWithBaseline(
   postResetRewards: RewardsAnalysisInternal,
   postResetSubmissions: SubmissionsAnalysisInternal,
   postResetLifecycle: TaskLifecycleAnalysis,
+  chainDailyActivity: DailyActivity[],
+  officialMonthlyRewards: Map<string, number>,
 ): Promise<{
   rewards: RewardsAnalysis;
   submissions: SubmissionsAnalysis;
@@ -672,6 +1066,7 @@ async function mergeWithBaseline(
   const allEarnerAddresses = new Set([
     ...baselineData.rewards.leaderboard.map(e => e.address),
     ...postResetRewards.rewards_by_recipient.keys(),
+    ...officialMonthlyRewards.keys(),
   ]);
 
   // Fetch balances for all addresses (post-reset scanner already fetched some)
@@ -692,15 +1087,17 @@ async function mergeWithBaseline(
     .map(address => {
       const balance = round(mergedBalances.get(address) || 0);
       const bl = baselineLookup.get(address);
-      let totalPft: number;
+      let trackedTotalPft: number;
       if (bl) {
         const balanceDelta = Math.max(0, balance - bl.balance);
-        totalPft = round(bl.total_pft + balanceDelta);
+        trackedTotalPft = round(bl.total_pft + balanceDelta);
       } else {
         // New user: use higher of scanner-detected or balance
         const scannerTotal = postResetRewards.rewards_by_recipient.get(address) || 0;
-        totalPft = round(Math.max(scannerTotal, balance));
+        trackedTotalPft = round(Math.max(scannerTotal, balance));
       }
+      const officialTotalPft = officialMonthlyRewards.get(address);
+      const totalPft = officialTotalPft !== undefined ? round(officialTotalPft) : trackedTotalPft;
       return { address, total_pft: totalPft, balance };
     })
     .sort((a, b) => b.balance !== a.balance ? b.balance - a.balance : b.total_pft - a.total_pft)
@@ -711,17 +1108,21 @@ async function mergeWithBaseline(
   for (const d of baselineData.rewards.daily_activity) {
     dailyActivityMap.set(d.date, { pft: d.pft, tx_count: d.tx_count });
   }
-  for (const d of postResetRewards.daily_activity) {
+  for (const d of chainDailyActivity) {
     const existing = dailyActivityMap.get(d.date);
     if (existing) {
-      dailyActivityMap.set(d.date, { pft: existing.pft + d.pft, tx_count: existing.tx_count + d.tx_count });
+      dailyActivityMap.set(d.date, {
+        pft: Math.max(existing.pft, d.pft),
+        tx_count: Math.max(existing.tx_count, d.tx_count),
+      });
     } else {
       dailyActivityMap.set(d.date, { pft: d.pft, tx_count: d.tx_count });
     }
   }
-  const daily_activity: DailyActivity[] = Array.from(dailyActivityMap.entries())
+  const mergedDailyActivity: DailyActivity[] = Array.from(dailyActivityMap.entries())
     .map(([date, { pft, tx_count }]) => ({ date, pft: round(pft), tx_count }))
     .sort((a, b) => a.date.localeCompare(b.date));
+  const daily_activity = fillDailyActivityGaps(mergedDailyActivity);
 
   // --- Submissions merge ---
   const mergedSubmitters = new Map<string, number>();
@@ -785,18 +1186,24 @@ async function mergeWithBaseline(
   // Sum earned across all addresses using same formula as leaderboard
   let totalPftDistributed = 0;
   for (const addr of allEarnerAddresses) {
-    const balance = mergedBalances.get(addr) || 0;
-    const bl = baselineLookup.get(addr);
-    if (bl) {
-      totalPftDistributed += bl.total_pft + Math.max(0, balance - bl.balance);
+    const officialTotal = officialMonthlyRewards.get(addr);
+    if (officialTotal !== undefined) {
+      totalPftDistributed += officialTotal;
     } else {
-      const scannerTotal = postResetRewards.rewards_by_recipient.get(addr) || 0;
-      totalPftDistributed += Math.max(scannerTotal, balance);
+      const balance = mergedBalances.get(addr) || 0;
+      const bl = baselineLookup.get(addr);
+      if (bl) {
+        totalPftDistributed += bl.total_pft + Math.max(0, balance - bl.balance);
+      } else {
+        const scannerTotal = postResetRewards.rewards_by_recipient.get(addr) || 0;
+        totalPftDistributed += Math.max(scannerTotal, balance);
+      }
     }
   }
   totalPftDistributed = round(totalPftDistributed);
-  const uniqueEarners = baselineData.network_totals.unique_earners + postResetRewards.unique_recipients - earnerOverlap;
-  const totalRewardsPaid = baselineData.network_totals.total_rewards_paid + postResetRewards.total_reward_transactions;
+  const uniqueEarnersEstimate = baselineData.network_totals.unique_earners + postResetRewards.unique_recipients - earnerOverlap;
+  const uniqueEarners = Math.max(uniqueEarnersEstimate, officialMonthlyRewards.size);
+  const totalRewardsPaid = daily_activity.reduce((sum, day) => sum + day.tx_count, 0);
   const totalSubmissions = baselineData.network_totals.total_submissions + postResetSubmissions.total_submissions;
   const uniqueSubmitters = baselineData.network_totals.unique_submitters + postResetSubmissions.unique_submitters - submitterOverlap;
 
@@ -847,12 +1254,14 @@ export default async function handler(request: VercelRequest, response: VercelRe
 
   const startTime = Date.now();
   let client: Client | null = null;
+  let connectedEndpoint = RPC_WS_URL;
 
   try {
     // Connect to XRPL and measure latency
-    client = new Client(RPC_WS_URL);
     const connectStart = Date.now();
-    await client.connect();
+    const connection = await connectClientWithFallback();
+    client = connection.client;
+    connectedEndpoint = connection.endpoint;
     const wsLatencyMs = Date.now() - connectStart;
 
     // Get current ledger index for liveness indicator
@@ -876,8 +1285,19 @@ export default async function handler(request: VercelRequest, response: VercelRe
     const memoTxs = await fetchAllAccountTx(client, MEMO_ADDRESS, 5000);
     
     // Dynamically discover relay wallets funded by memo address
-    const relayWallets = await discoverRelayWallets(memoTxs);
-    const allRewardAddresses = [...PRIMARY_REWARD_ADDRESSES, ...relayWallets];
+    const fundingRelayWallets = await discoverRelayWallets(memoTxs);
+    const baseRewardAddresses = Array.from(
+      new Set([...PRIMARY_REWARD_ADDRESSES, ...KNOWN_REWARD_RELAYS, ...fundingRelayWallets])
+    );
+    const behaviorRelayDiscovery = await discoverBehaviorRelayWallets(
+      client,
+      memoTxs,
+      baseRewardAddresses
+    );
+    const behaviorRelayWallets = behaviorRelayDiscovery.matches.map((m) => m.address);
+    const allRewardAddresses = Array.from(
+      new Set([...baseRewardAddresses, ...behaviorRelayWallets])
+    );
     
     // Fetch reward transactions from ALL reward addresses (primary + discovered relays)
     const rewardTxArrays = await Promise.all(
@@ -909,9 +1329,31 @@ export default async function handler(request: VercelRequest, response: VercelRe
       submissionsInternal.submission_events,
       rewardsInternal.reward_events
     );
+    const historicalDailyActivity = await fetchHistoricalDailyActivity();
+    const chainDailyActivity = mergeDailyActivityHistory(
+      historicalDailyActivity,
+      rewardsInternal.daily_activity
+    );
+    const historicalNonTaskDailyActivity = await fetchHistoricalNonTaskDailyActivity();
+    const chainNonTaskDailyActivity = mergeDailyActivityHistory(
+      historicalNonTaskDailyActivity,
+      rewardsInternal.non_task_daily_activity
+    );
+    const nonTaskTotalPft = round(
+      chainNonTaskDailyActivity.reduce((sum, day) => sum + day.pft, 0)
+    );
+    const nonTaskTotalTxs = chainNonTaskDailyActivity.reduce((sum, day) => sum + day.tx_count, 0);
+    const officialMonthlyRewards = await fetchOfficialMonthlyRewards();
 
     // Merge pre-reset baseline with post-reset live data
-    const merged = await mergeWithBaseline(client, rewardsInternal, submissionsInternal, taskLifecycle);
+    const merged = await mergeWithBaseline(
+      client,
+      rewardsInternal,
+      submissionsInternal,
+      taskLifecycle,
+      chainDailyActivity,
+      officialMonthlyRewards
+    );
 
     // Combine into final analytics object
     const analytics: NetworkAnalytics = {
@@ -922,9 +1364,24 @@ export default async function handler(request: VercelRequest, response: VercelRe
         memo_address: MEMO_ADDRESS,
         reward_txs_fetched: rewardTxs.length,
         memo_txs_fetched: memoTxs.length,
+        official_leaderboard_rows: officialMonthlyRewards.size,
+        historical_daily_rows: chainDailyActivity.length,
+        excluded_non_ptr_reward_txs: nonTaskTotalTxs,
+        excluded_non_ptr_reward_pft: nonTaskTotalPft,
+        relay_wallets_discovered_funding: fundingRelayWallets,
+        relay_wallets_discovered_behavior: behaviorRelayWallets,
+        relay_behavior_candidates_scanned: behaviorRelayDiscovery.scanned_candidates,
+        relay_behavior_lookback_days: RELAY_BEHAVIOR_LOOKBACK_DAYS,
+        relay_behavior_matches: behaviorRelayDiscovery.matches,
       },
       network_totals: merged.networkTotals,
       rewards: merged.rewards,
+      non_task_distributions: {
+        total_pft_distributed: nonTaskTotalPft,
+        total_transactions: nonTaskTotalTxs,
+        daily_activity: chainNonTaskDailyActivity,
+        recent_distributions: rewardsInternal.non_task_recent_distributions,
+      },
       submissions: merged.submissions,
       task_lifecycle: merged.taskLifecycle,
       network_health: {
@@ -934,7 +1391,7 @@ export default async function handler(request: VercelRequest, response: VercelRe
         ledger_close_unix: ledgerCloseUnix,
         seconds_since_close: secondsSinceClose,
         endpoint_status: 'online' as const,
-        endpoint_url: RPC_WS_URL,
+        endpoint_url: connectedEndpoint,
       },
     };
 
@@ -959,6 +1416,11 @@ export default async function handler(request: VercelRequest, response: VercelRe
         total_pft_distributed: analytics.network_totals.total_pft_distributed,
         unique_earners: analytics.network_totals.unique_earners,
         total_submissions: analytics.network_totals.total_submissions,
+        excluded_non_ptr_reward_txs: analytics.non_task_distributions.total_transactions,
+        excluded_non_ptr_reward_pft: analytics.non_task_distributions.total_pft_distributed,
+        relay_wallets_discovered_funding: fundingRelayWallets.length,
+        relay_wallets_discovered_behavior: behaviorRelayWallets.length,
+        new_behavior_relay_wallets: behaviorRelayWallets,
       },
       ...(process.env.DEBUG_WALLET_ANALYSIS === '1'
         ? {

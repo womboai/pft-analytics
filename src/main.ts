@@ -130,28 +130,20 @@ function renderDashboard(data: NetworkData) {
   // Daily activity table with continuous timeline (most recent first)
   const rawDailyData = data.rewards.daily_activity;
 
-  // XRPL testnet reset window (Feb 4-6, 2026):
-  // The baseline snapshot captures transaction history through Feb 4.
-  // The reset wiped on-chain tx history Feb 5-7. Balances were preserved
-  // and the new chain resumed activity on Feb 8. Per-day transaction data
-  // for Feb 5-7 is unrecoverable — only aggregate balance deltas remain.
-  const RESET_WINDOW = { start: '2026-02-05', end: '2026-02-07' };
-
-  // Build a continuous 14-day timeline ending today
+  // Build a continuous 14-day timeline ending today.
+  // Missing days are treated as 0 to avoid "n/a" artifacts.
   const today = new Date();
   const dateMap = new Map(rawDailyData.map(d => [d.date, d.pft]));
-  const continuousData: Array<{ date: string; pft: number; isReset: boolean }> = [];
+  const continuousData: Array<{ date: string; pft: number }> = [];
 
   // Build data with most recent first (i=0 is today, i=13 is 13 days ago)
   for (let i = 0; i <= 13; i++) {
     const date = new Date(today);
     date.setDate(date.getDate() - i);
     const dateStr = date.toISOString().split('T')[0];
-    const isReset = dateStr >= RESET_WINDOW.start && dateStr <= RESET_WINDOW.end;
     continuousData.push({
       date: dateStr,
-      pft: dateMap.get(dateStr) || 0,
-      isReset,
+      pft: dateMap.get(dateStr) ?? 0,
     });
   }
 
@@ -164,21 +156,13 @@ function renderDashboard(data: NetworkData) {
   };
 
   const dailyHtml = continuousData.map(d => {
-    if (d.isReset) {
-      return `
-        <div class="daily-row reset">
-          <div class="daily-date">${formatDateLabel(d.date)}</div>
-          <div class="daily-amount empty">0</div>
-          <div class="daily-bar-container"><span class="reset-label">Reset</span></div>
-        </div>
-      `;
-    }
-    const barWidth = d.pft > 0 ? Math.max((d.pft / maxPft) * 100, 3) : 0;
-    const isEmpty = d.pft === 0;
+    const pft = d.pft;
+    const barWidth = pft > 0 ? Math.max((pft / maxPft) * 100, 3) : 0;
+    const isEmpty = pft === 0;
     return `
       <div class="daily-row${isEmpty ? ' empty' : ''}">
         <div class="daily-date">${formatDateLabel(d.date)}</div>
-        <div class="daily-amount${isEmpty ? ' empty' : ''}">${isEmpty ? '0' : formatPFT(d.pft)}</div>
+        <div class="daily-amount${isEmpty ? ' empty' : ''}">${isEmpty ? '0' : formatPFT(pft)}</div>
         <div class="daily-bar-container">
           <div class="daily-bar" style="width: ${barWidth}%"></div>
         </div>
