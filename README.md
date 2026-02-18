@@ -85,7 +85,8 @@ A Vercel cron job runs every minute:
 2. Import to Vercel
 3. Set `BLOB_READ_WRITE_TOKEN` (auto-configured by Vercel Blob)
 4. Optional: Set `CRON_SECRET` to protect the cron endpoint
-5. Optional: Set `PFT_TASKNODE_JWT` to pull official Task Node leaderboard points for exact point matching
+5. Optional: Set `OPENAI_API_KEY` or `PFT_OPENAI_API_KEY` to enable LLM summaries in the dev feed
+6. Optional: Set `PFT_TASKNODE_JWT` to pull official Task Node leaderboard points for exact point matching
 
 Cron runs automatically every minute.
 

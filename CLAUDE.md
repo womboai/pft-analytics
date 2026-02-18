@@ -68,6 +68,7 @@ vercel dev       # Run with serverless functions locally
 | `CRON_SECRET` | Optional | Protects cron endpoint from unauthorized calls |
 | `BLOB_READ_WRITE_TOKEN` | Yes (production) | Vercel Blob storage access |
 | `PFT_TASKNODE_JWT` | Optional | Bearer token for authenticated `tasknode.postfiat.org/api/leaderboard` fetch (exact point matching) |
+| `OPENAI_API_KEY` (or `PFT_OPENAI_API_KEY`) | Optional | Enables LLM summaries for dev activity feed |
 
 ## Common Tasks
 
