@@ -203,6 +203,10 @@ interface DevContributionEvent {
   is_postfiatorg_repo: boolean;
 }
 
+function normalizeLlmSummaryFlag(value: unknown): boolean {
+  return value === true || value === false ? value : false;
+}
+
 interface DevFeedStats {
   total_events_7d: number;
   postfiatorg_events_7d: number;
@@ -674,7 +678,10 @@ async function fetchHistoricalDevActivity(): Promise<HistoricalDevActivity> {
     };
 
     const historicalEvents = Array.isArray(payload?.dev_activity?.events)
-      ? (payload.dev_activity.events as DevContributionEvent[])
+      ? (payload.dev_activity.events as Array<DevContributionEvent>).map((event) => ({
+          ...event,
+          summary_is_llm_generated: normalizeLlmSummaryFlag(event?.summary_is_llm_generated),
+        }))
       : [];
     const historicalContributors = Array.isArray(payload?.dev_activity?.contributors)
       ? (payload.dev_activity.contributors as DevContributor[])
@@ -1108,9 +1115,7 @@ async function collectDevContributionFeed(): Promise<{
   for (const cached of priorEvents) {
     if (cached?.id && typeof cached.summary === 'string' && cached.summary.length) {
       knownSummaries.set(cached.id, cached.summary);
-      if (typeof cached.summary_is_llm_generated === 'boolean') {
-        knownSummaryGenerated.set(cached.id, cached.summary_is_llm_generated);
-      }
+      knownSummaryGenerated.set(cached.id, normalizeLlmSummaryFlag(cached.summary_is_llm_generated));
     }
   }
 
@@ -1128,9 +1133,7 @@ async function collectDevContributionFeed(): Promise<{
     }
     if (existingSummary) {
       event.summary = existingSummary;
-      if (knownSummaryGenerated.has(event.id)) {
-        event.summary_is_llm_generated = knownSummaryGenerated.get(event.id);
-      }
+      event.summary_is_llm_generated = knownSummaryGenerated.get(event.id) ?? false;
     } else if (!event.summary) {
       event.summary = event.title;
       event.summary_is_llm_generated = false;

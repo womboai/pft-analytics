@@ -208,9 +208,9 @@ function renderDashboard(data: NetworkData) {
       const eventTime = formatRelativeTime(entry.occurred_at);
       const typeLabel = entry.type === 'merged_pr' ? 'Merged PR' : 'Commit';
       const summaryText = entry.summary || `${typeLabel}: ${entry.title}`;
-      const isLlmSummary = entry.summary_is_llm_generated;
-      const summarySourceText = isLlmSummary === true ? 'LLM' : isLlmSummary === false ? 'No LLM' : 'Unknown';
-      const summarySourceClass = isLlmSummary === true ? 'llm' : isLlmSummary === false ? 'manual' : 'unknown';
+      const isLlmSummary = entry.summary_is_llm_generated === true;
+      const summarySourceText = isLlmSummary ? 'LLM' : 'No LLM';
+      const summarySourceClass = isLlmSummary ? 'llm' : 'manual';
       return `
         <div class="dev-feed-row clickable" data-full-address="${entry.actor_login}" data-event-url="${entry.url}" role="link" tabindex="0" aria-label="Open ${typeLabel}: ${entry.title}">
           <div class="dev-feed-header">
