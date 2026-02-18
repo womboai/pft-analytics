@@ -671,7 +671,13 @@ async function openaiSummarizeBatch(events: DevContributionEvent[]): Promise<Rec
           throw new Error('OpenAI returned non-array response');
         }
         for (const row of parsed) {
-          const idx = typeof row?.index === 'number' ? row.index - 1 : -1;
+          const rawIndex = row && typeof row === 'object' ? (row as { index?: unknown }).index : undefined;
+          const indexValue = typeof rawIndex === 'number'
+            ? rawIndex
+            : typeof rawIndex === 'string'
+              ? Number(rawIndex)
+              : NaN;
+          const idx = Number.isFinite(indexValue) ? indexValue - 1 : -1;
           const summary = coalesceTrimmed(row?.summary, '');
           if (idx >= 0 && idx < chunk.length && summary) {
             summaries[chunk[idx].id] = summary;
