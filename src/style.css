@@ -1049,61 +1049,13 @@ body {
   transition: color 0.6s ease-out;
 }
 
-.dev-feed-summary {
-  font-size: 0.72rem;
-  color: var(--text-secondary);
-  line-height: 1.35;
-  max-width: 100%;
-  display: flex;
-  align-items: flex-start;
-  gap: 0.45rem;
-  transition: color 0.6s ease-out;
-}
-
-.dev-feed-summary-source {
-  flex: 0 0 auto;
-  font-size: 0.6rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  padding: 0.08rem 0.35rem;
-  border: 1px solid var(--border);
-  border-radius: 0;
-  color: var(--text-muted);
-  margin-top: 0.02rem;
-  background: rgba(0, 255, 0, 0.06);
-}
-
-.dev-feed-summary-source.llm {
-  border-color: #00ff00;
-  color: #00ff00;
-  background: rgba(0, 255, 0, 0.12);
-}
-
-.dev-feed-summary-source.manual {
-  border-color: var(--text-muted);
-  color: var(--text-muted);
-}
-
-.dev-feed-summary-source.unknown {
-  border-color: var(--text-muted);
-  color: var(--text-muted);
-  background: rgba(0, 255, 0, 0.02);
-}
-
 .dev-feed-row:hover .dev-feed-title,
-.dev-feed-row:hover .dev-feed-summary,
-.dev-feed-row:hover .dev-feed-summary-source,
 .dev-feed-row:hover .dev-feed-rank,
 .dev-feed-row:hover .dev-feed-author,
 .dev-feed-row:hover .dev-feed-type,
 .dev-feed-row:hover .dev-feed-meta {
   color: var(--accent);
   transition: color 0s;
-}
-
-.dev-feed-row:hover .dev-feed-summary-source {
-  border-color: rgba(0, 255, 0, 0.75);
-  color: var(--accent);
 }
 
 .dev-feed-meta {

@@ -561,24 +561,80 @@ function formatSafeModelName(model: string): string {
   return model.trim().toLowerCase();
 }
 
-function parseOpenAISummaryArray(content: string): unknown {
+interface ParsedSummaryRow {
+  index: number;
+  summary: string;
+}
+
+function coerceSummaryIndex(value: unknown): number {
+  const fromNumber = typeof value === 'number' && Number.isFinite(value) ? value : Number.NaN;
+  if (Number.isFinite(fromNumber)) {
+    return fromNumber;
+  }
+
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value.trim());
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return Number.NaN;
+}
+
+function parseOpenAISummaryArray(content: string): ParsedSummaryRow[] {
   const text = content.trim();
   if (!text) {
     return [];
   }
 
+  const normalizeRows = (raw: unknown): ParsedSummaryRow[] => {
+    if (!Array.isArray(raw)) {
+      return [];
+    }
+
+    return raw
+      .map((row, idx) => {
+        if (!row || typeof row !== 'object') {
+          return null;
+        }
+        const summary = coalesceTrimmed(
+          (row as { summary?: unknown }).summary
+        ) || coalesceTrimmed((row as { text?: unknown }).text) || coalesceTrimmed(
+          (row as { description?: unknown }).description
+        ) || coalesceTrimmed((row as { message?: unknown }).message);
+        if (!summary) {
+          return null;
+        }
+
+        const rawIndex = coerceSummaryIndex(
+          (row as { index?: unknown }).index ?? (row as { event_index?: unknown }).event_index ?? idx + 1
+        );
+
+        return {
+          index: Number.isFinite(rawIndex) ? rawIndex : idx + 1,
+          summary,
+        };
+      })
+      .filter((row): row is ParsedSummaryRow => row !== null);
+  };
+
   try {
-    return JSON.parse(text);
+    return normalizeRows(JSON.parse(text));
   } catch {
     const fencedMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
     if (fencedMatch?.[1]) {
-      return JSON.parse(fencedMatch[1].trim());
+      try {
+        return normalizeRows(JSON.parse(fencedMatch[1].trim()));
+      } catch {}
     }
 
     const start = text.indexOf('[');
     const end = text.lastIndexOf(']');
     if (start >= 0 && end > start) {
-      return JSON.parse(text.slice(start, end + 1));
+      try {
+        return normalizeRows(JSON.parse(text.slice(start, end + 1)));
+      } catch {}
     }
 
     return [];
@@ -667,21 +723,35 @@ async function openaiSummarizeBatch(events: DevContributionEvent[]): Promise<Rec
           throw new Error('OpenAI returned empty content');
         }
         const parsed = parseOpenAISummaryArray(content);
-        if (!Array.isArray(parsed)) {
-          throw new Error('OpenAI returned non-array response');
+        if (parsed.length === 0) {
+          throw new Error('OpenAI returned empty/invalid summary array');
         }
+        let mappedInChunk = 0;
+
         for (const row of parsed) {
-          const rawIndex = row && typeof row === 'object' ? (row as { index?: unknown }).index : undefined;
-          const indexValue = typeof rawIndex === 'number'
-            ? rawIndex
-            : typeof rawIndex === 'string'
-              ? Number(rawIndex)
-              : NaN;
-          const idx = Number.isFinite(indexValue) ? indexValue - 1 : -1;
-          const summary = coalesceTrimmed(row?.summary, '');
-          if (idx >= 0 && idx < chunk.length && summary) {
-            summaries[chunk[idx].id] = summary;
+          const idxValue = coerceSummaryIndex(row.index);
+          const idx = idxValue >= 1 && idxValue <= chunk.length ? idxValue - 1 : idxValue;
+          const isValidIndex = Number.isInteger(idx) && idx >= 0 && idx < chunk.length;
+          if (isValidIndex) {
+            summaries[chunk[idx].id] = row.summary;
+            mappedInChunk += 1;
           }
+        }
+
+        if (mappedInChunk < parsed.length) {
+          parsed.forEach((row, idx) => {
+            const targetId = row.index >= 1 && row.index <= parsed.length
+              ? chunk[row.index - 1]?.id
+              : chunk[idx]?.id;
+            if (targetId && !summaries[targetId]) {
+              summaries[targetId] = row.summary;
+              mappedInChunk += 1;
+            }
+          });
+        }
+
+        if (mappedInChunk === 0) {
+          throw new Error('OpenAI summary mapping resolved to zero events');
         }
         break;
       } catch (error) {

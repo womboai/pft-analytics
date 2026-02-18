@@ -207,10 +207,6 @@ function renderDashboard(data: NetworkData) {
       const actorDisplay = formatAddress(entry.actor_login);
       const eventTime = formatRelativeTime(entry.occurred_at);
       const typeLabel = entry.type === 'merged_pr' ? 'Merged PR' : 'Commit';
-      const summaryText = entry.summary || `${typeLabel}: ${entry.title}`;
-      const isLlmSummary = entry.summary_is_llm_generated === true;
-      const summarySourceText = isLlmSummary ? 'LLM' : 'No LLM';
-      const summarySourceClass = isLlmSummary ? 'llm' : 'manual';
       return `
         <div class="dev-feed-row clickable" data-full-address="${entry.actor_login}" data-event-url="${entry.url}" role="link" tabindex="0" aria-label="Open ${typeLabel}: ${entry.title}">
           <div class="dev-feed-header">
@@ -222,12 +218,6 @@ function renderDashboard(data: NetworkData) {
             <a href="${entry.url}" target="_blank" rel="noopener noreferrer" class="explorer-link" title="Open event">↗</a>
           </div>
           <div class="dev-feed-title" title="${entry.title}">${entry.title}</div>
-          <div class="dev-feed-summary">
-            ${summaryText}
-            <span class="dev-feed-summary-source ${summarySourceClass}" title="${summarySourceText}">
-              ${summarySourceText}
-            </span>
-          </div>
           <div class="dev-feed-meta">
             <span>${entry.repo_full_name}</span>
             <span>${eventTime}</span>
