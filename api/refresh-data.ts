@@ -561,6 +561,30 @@ function formatSafeModelName(model: string): string {
   return model.trim().toLowerCase();
 }
 
+function parseOpenAISummaryArray(content: string): unknown {
+  const text = content.trim();
+  if (!text) {
+    return [];
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    const fencedMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fencedMatch?.[1]) {
+      return JSON.parse(fencedMatch[1].trim());
+    }
+
+    const start = text.indexOf('[');
+    const end = text.lastIndexOf(']');
+    if (start >= 0 && end > start) {
+      return JSON.parse(text.slice(start, end + 1));
+    }
+
+    return [];
+  }
+}
+
 async function githubGet<T>(path: string): Promise<{ ok: true; data: T; status: number } | { ok: false; status: number; error: string }> {
   try {
     const abortController = new AbortController();
@@ -642,7 +666,7 @@ async function openaiSummarizeBatch(events: DevContributionEvent[]): Promise<Rec
         if (!content) {
           throw new Error('OpenAI returned empty content');
         }
-        const parsed = JSON.parse(content);
+        const parsed = parseOpenAISummaryArray(content);
         if (!Array.isArray(parsed)) {
           throw new Error('OpenAI returned non-array response');
         }
