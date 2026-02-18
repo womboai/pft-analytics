@@ -84,7 +84,17 @@ const DEV_ACTIVITY_SUMMARY_FALLBACK_MODELS = [
 const DEV_ACTIVITY_LLM_DAILY_ALERT_USD = Number(
   process.env.PFT_LLM_DAILY_ALERT_USD || '100'
 );
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
+const OPENAI_API_KEY = (() => {
+  const candidates = [
+    process.env.OPENAI_API_KEY,
+    process.env.PFT_OPENAI_API_KEY,
+    process.env.PFT_OPENAI_SECRET,
+    process.env.PFT_OPENAI_TOKEN,
+    process.env.OPENAI_API_KEY_V2,
+  ];
+  const found = candidates.find((candidate) => coalesceTrimmed(candidate, '').length > 0);
+  return coalesceTrimmed(found, '');
+})();
 
 // System accounts to exclude (built dynamically with discovered relays)
 const BASE_SYSTEM_ACCOUNTS = new Set([...PRIMARY_REWARD_ADDRESSES, MEMO_ADDRESS, 'rrrrrrrrrrrrrrrrrrrrrhoLvTp']);
@@ -483,13 +493,15 @@ function getGithubHeaders(): Record<string, string> {
     Accept: 'application/vnd.github+json',
     'User-Agent': 'pft-analytics-refresh-data',
   };
-  if (OPENAI_API_KEY.length > 0 && OPENAI_API_KEY.startsWith('sk-')) {
-    // no-op: intentionally keep in case of accidental key reuse in tests
-  }
   if (process.env.GITHUB_TOKEN || process.env.PFT_GITHUB_TOKEN) {
     headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN || process.env.PFT_GITHUB_TOKEN}`;
   }
   return headers;
+}
+
+function hasUsableOpenAIKey(): boolean {
+  const trimmed = OPENAI_API_KEY.trim();
+  return trimmed.startsWith('sk-') || trimmed.startsWith('sk-proj-');
 }
 
 function sanitizeCommitMessage(value: string): string {
@@ -1141,7 +1153,9 @@ async function collectDevContributionFeed(): Promise<{
   }
 
   let totalRunCost = 0;
-  if (eventsNeedingSummary.length > 0 && OPENAI_API_KEY) {
+  const canSummarizeWithOpenAI =
+    eventsNeedingSummary.length > 0 && hasUsableOpenAIKey();
+  if (canSummarizeWithOpenAI) {
     try {
       const summaryMap = await openaiSummarizeBatch(eventsNeedingSummary.slice(0, 20));
       eventsNeedingSummary.forEach((event) => {
@@ -1165,7 +1179,6 @@ async function collectDevContributionFeed(): Promise<{
       const model = formatSafeModelName(DEV_ACTIVITY_SUMMARY_FALLBACK_MODELS[0]);
       totalRunCost = estimateSummaryCostUsd(estimatedInput, estimatedOutput, model);
     } catch (error) {
-      failures.push(`openai summarize failed: ${error instanceof Error ? error.message : String(error)}`);
       if (process.env.NODE_ENV !== 'production') {
         console.warn('openai summarize failed', error);
       }
@@ -1177,6 +1190,16 @@ async function collectDevContributionFeed(): Promise<{
         event.summary_is_llm_generated = false;
         knownSummaryGenerated.set(event.id, false);
       }
+      failures.push(`openai summarize failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  } else if (eventsNeedingSummary.length > 0 && !hasUsableOpenAIKey()) {
+    failures.push('openai summarize skipped: missing or invalid OPENAI_API_KEY');
+    for (const event of eventsWindow) {
+      event.summary = event.summary || (event.type === 'merged_pr'
+        ? `Merged PR in ${event.repo_name} by ${event.actor_login}.`
+        : `Commit in ${event.repo_name} by ${event.actor_login}.`);
+      event.summary_is_llm_generated = false;
+      knownSummaryGenerated.set(event.id, false);
     }
   } else {
     for (const event of eventsWindow) {
