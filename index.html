@@ -16,7 +16,7 @@
       if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
         const reactUrl = 'https://esm.sh/react@18.3.1';
         const reactDomUrl = 'https://esm.sh/react-dom@18.3.1/client';
-        const agentationUrl = 'https://esm.sh/agentation@1.3.2?deps=react@18.3.1,react-dom@18.3.1';
+        const agentationUrl = 'https://esm.sh/agentation@2.2.1?deps=react@18.3.1,react-dom@18.3.1';
 
         import(/* @vite-ignore */ reactUrl).then(React => {
           import(/* @vite-ignore */ reactDomUrl).then(({ createRoot }) => {

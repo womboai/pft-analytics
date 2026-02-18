@@ -18,6 +18,46 @@ export interface NetworkData {
     leaderboard: Array<{ address: string; total_pft: number; balance: number }>;
     daily_activity: Array<{ date: string; pft: number; tx_count: number }>;
   };
+  dev_activity?: {
+    generated_at: string;
+    lookback_days: number;
+    active_contributor_window_days: number;
+    contributors: Array<{
+      github_login: string;
+      source: 'postfiatorg_recent_commit_or_pr';
+      last_seen_at: string;
+    }>;
+    events: Array<{
+      id: string;
+      type: 'commit' | 'merged_pr';
+      occurred_at: string;
+      actor_login: string;
+      repo_full_name: string;
+      repo_owner: string;
+      repo_name: string;
+      title: string;
+      summary: string;
+      summary_is_llm_generated?: boolean;
+      url: string;
+      sha?: string;
+      pr_number?: number;
+      is_postfiatorg_repo: boolean;
+    }>;
+    stats: {
+      total_events_7d: number;
+      postfiatorg_events_7d: number;
+      external_repo_events_7d: number;
+      unique_contributors_7d: number;
+    };
+    spend_monitor: {
+      estimated_usd_today: number;
+      threshold_usd: number;
+      threshold_exceeded: boolean;
+      last_alert_at?: string;
+      run_estimated_usd: number;
+      run_event_count: number;
+    };
+  };
   submissions: {
     daily_submissions: Array<{ date: string; submissions: number }>;
     top_submitters: Array<{ address: string; submissions: number }>;

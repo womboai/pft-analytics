@@ -4,9 +4,32 @@ import type { NetworkData } from './api';
 
 // Polling interval in milliseconds (60 seconds)
 const REFRESH_INTERVAL_MS = 60000;
+const DEV_ACTIVITY_LOOKBACK_DAYS = 7;
 
 // Store the interval ID so we can clear it if needed
 let refreshIntervalId: number | null = null;
+
+function formatRelativeTime(isoDate: string): string {
+  const eventTs = Date.parse(isoDate);
+  if (!Number.isFinite(eventTs)) return 'Unknown';
+
+  const elapsedMs = Date.now() - eventTs;
+  const isFuture = elapsedMs < 0;
+  const ms = Math.abs(elapsedMs);
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  const weeks = Math.floor(days / 7);
+  const months = Math.floor(days / 30);
+
+  if (seconds < 60) return isFuture ? 'in a few seconds' : 'just now';
+  if (minutes < 60) return isFuture ? `${minutes} min from now` : `${minutes} min ago`;
+  if (hours < 24) return isFuture ? `${hours}h from now` : `${hours}h ago`;
+  if (days < 7) return isFuture ? `${days}d from now` : `${days}d ago`;
+  if (weeks < 8) return isFuture ? `${weeks}w from now` : `${weeks}w ago`;
+  return isFuture ? `${months}mo from now` : `${months}mo ago`;
+}
 
 // Render all dashboard data to the DOM
 function renderDashboard(data: NetworkData) {
@@ -177,25 +200,55 @@ function renderDashboard(data: NetworkData) {
     </div>
   `;
 
-  // Top submitters
-  const submittersHtml = data.submissions.top_submitters.slice(0, 10).map((entry, i) => `
-    <div class="submitter-row">
-      <div class="rank">#${i + 1}</div>
-      <div class="address-cell">
-        <span class="address" data-full-address="${entry.address}">
-          ${formatAddress(entry.address)}
-          <span class="address-tooltip">${entry.address}</span>
-        </span>
-        <a href="https://explorer.testnet.postfiat.org/accounts/${entry.address}" target="_blank" rel="noopener noreferrer" class="explorer-link" title="View on XRPL Explorer">↗</a>
-      </div>
-      <div class="count">${entry.submissions}</div>
-    </div>
-  `).join('');
+  const devActivity = data.dev_activity;
+  const devRows = devActivity?.events
+    .slice(0, 60)
+    .map((entry, index) => {
+      const actorDisplay = formatAddress(entry.actor_login);
+      const eventTime = formatRelativeTime(entry.occurred_at);
+      const typeLabel = entry.type === 'merged_pr' ? 'Merged PR' : 'Commit';
+      const summaryText = entry.summary || `${typeLabel}: ${entry.title}`;
+      const isLlmSummary = entry.summary_is_llm_generated;
+      const summarySourceText = isLlmSummary === true ? 'LLM' : isLlmSummary === false ? 'No LLM' : 'Unknown';
+      const summarySourceClass = isLlmSummary === true ? 'llm' : isLlmSummary === false ? 'manual' : 'unknown';
+      return `
+        <div class="dev-feed-row clickable" data-full-address="${entry.actor_login}" data-event-url="${entry.url}" role="link" tabindex="0" aria-label="Open ${typeLabel}: ${entry.title}">
+          <div class="dev-feed-header">
+            <div class="dev-feed-rank">#${index + 1}</div>
+            <a href="https://github.com/${entry.actor_login}" target="_blank" rel="noopener noreferrer" class="dev-feed-author" title="Open GitHub profile">
+              @${actorDisplay}
+            </a>
+            <span class="dev-feed-type ${entry.type}">${typeLabel}</span>
+            <a href="${entry.url}" target="_blank" rel="noopener noreferrer" class="explorer-link" title="Open event">↗</a>
+          </div>
+          <div class="dev-feed-title" title="${entry.title}">${entry.title}</div>
+          <div class="dev-feed-summary">
+            ${summaryText}
+            <span class="dev-feed-summary-source ${summarySourceClass}" title="${summarySourceText}">
+              ${summarySourceText}
+            </span>
+          </div>
+          <div class="dev-feed-meta">
+            <span>${entry.repo_full_name}</span>
+            <span>${eventTime}</span>
+            ${entry.pr_number ? `<span>PR #${entry.pr_number}</span>` : ''}
+          </div>
+        </div>
+      `;
+    })
+    .join('');
+
+  const statsText = devActivity
+    ? `<div class="section-note-inline">Events: ${devActivity.stats.total_events_7d} · Contributors: ${devActivity.stats.unique_contributors_7d}</div>`
+    : '<div class="section-note-inline">No updates yet</div>';
+
+  const devRowsList = devRows || `<div class="dev-feed-empty">No activity in the last ${devActivity?.lookback_days ?? DEV_ACTIVITY_LOOKBACK_DAYS} days</div>`;
 
   document.getElementById('submitters')!.innerHTML = `
-    <h2>Top Submitters</h2>
-    <div class="submitters-list">
-      ${submittersHtml}
+    <h2>PFT Team Code Updates</h2>
+    ${statsText}
+    <div class="dev-feed-list">
+      ${devRowsList}
     </div>
   `;
 
@@ -205,6 +258,7 @@ function renderDashboard(data: NetworkData) {
   // Re-setup interactive handlers after DOM update
   setupAddressCopyHandlers();
   setupAddressSearch();
+  setupDevFeedRowLinks();
 }
 
 // Update footer and header timestamps
@@ -240,6 +294,36 @@ function hideRefreshIndicator() {
   if (indicator) {
     indicator.classList.remove('refreshing');
   }
+}
+
+function setupDevFeedRowLinks() {
+  const rows = document.querySelectorAll<HTMLElement>('.dev-feed-row.clickable[data-event-url]');
+  rows.forEach((row) => {
+    const eventUrl = row.getAttribute('data-event-url');
+    if (!eventUrl) return;
+
+    const openEvent = (e?: Event) => {
+      if (e && e instanceof MouseEvent) {
+        const target = e.target as HTMLElement;
+        if (target.closest('.explorer-link, .dev-feed-author')) {
+          return;
+        }
+      }
+      window.open(eventUrl, '_blank', 'noopener,noreferrer');
+    };
+
+    row.addEventListener('click', (event) => {
+      openEvent(event);
+    });
+
+    row.addEventListener('keydown', (event) => {
+      const keyboard = event as KeyboardEvent;
+      if (keyboard.key === 'Enter' || keyboard.key === ' ') {
+        keyboard.preventDefault();
+        openEvent();
+      }
+    });
+  });
 }
 
 // Start auto-refresh polling
@@ -298,7 +382,7 @@ async function init() {
         <div class="loading">Loading...</div>
       </section>
       <section id="submitters" class="section">
-        <h2>Most Active Submitters</h2>
+        <h2>PFT Team Code Updates</h2>
         <div class="loading">Loading...</div>
       </section>
       <section id="network-health" class="section full-width">
@@ -389,8 +473,8 @@ function setupAddressSearch() {
     updateClearButton();
     const query = searchInput.value.toLowerCase().trim();
     const leaderboardRows = document.querySelectorAll('.leaderboard-table tbody tr');
-    const submitterRows = document.querySelectorAll('.submitter-row');
-    const allRows = document.querySelectorAll('.leaderboard-table tbody tr, .submitter-row');
+    const devFeedRows = document.querySelectorAll('.dev-feed-row');
+    const allRows = document.querySelectorAll('.leaderboard-table tbody tr, .dev-feed-row');
 
     if (!query) {
       // Clear search state - show all rows normally
@@ -404,7 +488,7 @@ function setupAddressSearch() {
 
     let matchCount = 0;
     let earnerRank: number | null = null;
-    let submitterRank: number | null = null;
+    let devFeedRank: number | null = null;
     let matchedAddress: string | null = null;
     let matchedBalance: string | null = null;
     let matchedEarned: string | null = null;
@@ -435,18 +519,15 @@ function setupAddressSearch() {
       }
     });
 
-    // Find rank in submitters
-    submitterRows.forEach((row, index) => {
-      const addressEl = row.querySelector('.address[data-full-address]');
-      if (!addressEl) return;
-
-      const fullAddress = addressEl.getAttribute('data-full-address')?.toLowerCase() || '';
+    // Find rank in team activity feed
+    devFeedRows.forEach((row, index) => {
+      const fullAddress = row.getAttribute('data-full-address')?.toLowerCase() || '';
 
       if (fullAddress.includes(query)) {
         row.classList.add('search-match');
         row.classList.remove('search-dimmed');
         matchCount++;
-        if (submitterRank === null) submitterRank = index + 1; // 1-indexed
+        if (devFeedRank === null) devFeedRank = index + 1; // 1-indexed
       } else {
         row.classList.remove('search-match');
         row.classList.add('search-dimmed');
@@ -482,20 +563,20 @@ function setupAddressSearch() {
                 <span class="wallet-value">#${earnerRank} <span class="wallet-subtext">of ${leaderboardRows.length}</span></span>
               </div>
               <div class="wallet-summary-item">
-                <span class="wallet-label">Submitter Rank</span>
-                <span class="wallet-value">${submitterRank !== null ? `#${submitterRank} <span class="wallet-subtext">of ${submitterRows.length}</span>` : '<span class="wallet-subtext">Not ranked</span>'}</span>
+                <span class="wallet-label">Team Activity Match</span>
+                <span class="wallet-value">${devFeedRank !== null ? `#${devFeedRank} <span class="wallet-subtext">of ${devFeedRows.length}</span>` : '<span class="wallet-subtext">No team activity match</span>'}</span>
               </div>
             </div>
           </div>
         `;
       } else {
-        // Fallback for non-earner matches (submitters only)
+        // Fallback for non-earner matches
         const parts: string[] = [];
         if (earnerRank !== null) {
           parts.push(`Earner #${earnerRank}`);
         }
-        if (submitterRank !== null) {
-          parts.push(`Submitter #${submitterRank}`);
+        if (devFeedRank !== null) {
+          parts.push(`Team Activity #${devFeedRank}`);
         }
         resultsInfoEl.innerHTML = `Found: ${parts.join(' &bull; ')}`;
       }

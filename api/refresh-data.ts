@@ -56,9 +56,45 @@ const RELAY_BEHAVIOR_CANDIDATE_SCAN_LIMIT = 60;
 const RELAY_BEHAVIOR_TX_FETCH_LIMIT = 2000;
 const MEMO_ADDRESS = 'rwdm72S9YVKkZjeADKU2bbUMuY4vPnSfH7'; // Receives task memos
 const DEBUG_WALLET = 'rDqf4nowC2PAZgn1UGHDn46mcUMREYJrsr';
+const GITHUB_API_BASE = 'https://api.github.com';
+const GITHUB_ORG = 'postfiatorg';
+const GITHUB_REQUEST_TIMEOUT_MS = 12_000;
+const DEV_ACTIVITY_LOOKBACK_DAYS = Number(
+  process.env.PFT_DEV_ACTIVITY_LOOKBACK_DAYS || process.env.PFT_DEV_ACTIVITY_LOOKBACK || '7'
+);
+const DEV_ACTIVITY_ACTIVE_CONTRIBUTOR_DAYS = Number(
+  process.env.PFT_DEV_ACTIVITY_ACTIVE_CONTRIBUTOR_DAYS ||
+    process.env.PFT_DEV_ACTIVITY_ACTIVE_WINDOW_DAYS ||
+    '30'
+);
+const DEV_ACTIVITY_MAX_EVENTS = Number(process.env.PFT_DEV_ACTIVITY_MAX_EVENTS || '120');
+const DEV_ACTIVITY_MAX_REPOS = Number(process.env.PFT_DEV_ACTIVITY_MAX_REPOS || '50');
+const DEV_ACTIVITY_KEEP_DAYS = Number(process.env.PFT_DEV_ACTIVITY_KEEP_DAYS || '45');
+const DEV_ACTIVITY_SUMMARY_MODEL =
+  process.env.PFT_GPT_MODEL ||
+  process.env.PFT_OPENAI_MODEL ||
+  process.env.OPENAI_MODEL ||
+  'gpt-4o-mini';
+const DEV_ACTIVITY_SUMMARY_FALLBACK_MODELS = [
+  DEV_ACTIVITY_SUMMARY_MODEL,
+  'gpt-4o-mini',
+  'gpt-4o',
+  'gpt-4.1-mini',
+];
+const DEV_ACTIVITY_LLM_DAILY_ALERT_USD = Number(
+  process.env.PFT_LLM_DAILY_ALERT_USD || '100'
+);
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 
 // System accounts to exclude (built dynamically with discovered relays)
 const BASE_SYSTEM_ACCOUNTS = new Set([...PRIMARY_REWARD_ADDRESSES, MEMO_ADDRESS, 'rrrrrrrrrrrrrrrrrrrrrhoLvTp']);
+
+const OPENAI_MODEL_PRICING: Record<string, { inputUsdPerMillion: number; outputUsdPerMillion: number }> = {
+  'gpt-5': { inputUsdPerMillion: 1.25, outputUsdPerMillion: 10 },
+  'gpt-4o': { inputUsdPerMillion: 5, outputUsdPerMillion: 15 },
+  'gpt-4o-mini': { inputUsdPerMillion: 0.15, outputUsdPerMillion: 0.6 },
+  'gpt-4.1-mini': { inputUsdPerMillion: 0.4, outputUsdPerMillion: 1.6 },
+};
 
 // Type definitions
 interface RewardEntry {
@@ -114,6 +150,90 @@ interface DailySubmission {
 interface TopSubmitter {
   address: string;
   submissions: number;
+}
+
+interface GitHubSearchCommitRepository {
+  full_name?: string;
+  name?: string;
+  owner?: { login?: string };
+}
+
+interface GitHubSearchCommitItem {
+  sha?: string;
+  html_url?: string;
+  commit?: {
+    message?: string;
+    author?: { date?: string };
+    committer?: { date?: string };
+  };
+  author?: { login?: string } | null;
+  repository?: GitHubSearchCommitRepository;
+}
+
+interface GitHubPull {
+  number?: number;
+  title?: string;
+  html_url?: string;
+  merged_at?: string | null;
+  merged_by?: { login?: string } | null;
+  user?: { login?: string } | null;
+  repository?: GitHubSearchCommitRepository;
+}
+
+interface DevContributor {
+  github_login: string;
+  source: 'postfiatorg_recent_commit_or_pr';
+  last_seen_at: string;
+}
+
+interface DevContributionEvent {
+  id: string;
+  type: 'commit' | 'merged_pr';
+  occurred_at: string;
+  actor_login: string;
+  repo_full_name: string;
+  repo_owner: string;
+  repo_name: string;
+  title: string;
+  summary: string;
+  summary_is_llm_generated?: boolean;
+  url: string;
+  sha?: string;
+  pr_number?: number;
+  is_postfiatorg_repo: boolean;
+}
+
+interface DevFeedStats {
+  total_events_7d: number;
+  postfiatorg_events_7d: number;
+  external_repo_events_7d: number;
+  unique_contributors_7d: number;
+}
+
+interface DevFeedSpend {
+  estimated_usd_today: number;
+  threshold_usd: number;
+  threshold_exceeded: boolean;
+  last_alert_at?: string;
+  run_estimated_usd: number;
+  run_event_count: number;
+}
+
+interface DevActivity {
+  generated_at: string;
+  lookback_days: number;
+  active_contributor_window_days: number;
+  contributors: DevContributor[];
+  events: DevContributionEvent[];
+  stats: DevFeedStats;
+  spend_monitor: DevFeedSpend;
+}
+
+interface HistoricalDevActivity {
+  events: DevContributionEvent[];
+  contributors: DevContributor[];
+  spend: DevFeedSpend | null;
+  generatedAt: string;
 }
 
 interface RewardsAnalysis {
@@ -190,6 +310,12 @@ interface NetworkAnalytics {
     relay_behavior_candidates_scanned?: number;
     relay_behavior_lookback_days?: number;
     relay_behavior_matches?: RelayBehaviorMatch[];
+    github_repos_scanned?: number;
+    github_external_repos_scanned?: number;
+    github_active_contributors_scanned?: number;
+    github_events_collected?: number;
+    github_request_failures?: string[];
+    github_error_count?: number;
   };
   network_totals: {
     total_pft_distributed: number;
@@ -199,6 +325,7 @@ interface NetworkAnalytics {
     unique_submitters: number;
   };
   rewards: RewardsAnalysis;
+  dev_activity?: DevActivity;
   non_task_distributions: {
     total_pft_distributed: number;
     total_transactions: number;
@@ -301,6 +428,494 @@ function round(value: number, decimals: number = 2): number {
   return Math.round(value * Math.pow(10, decimals)) / Math.pow(10, decimals);
 }
 
+function clampInt(value: number, fallback: number, min = 0, max = Number.MAX_SAFE_INTEGER): number {
+  const parsed = Number.isFinite(value) ? Math.floor(value) : fallback;
+  if (parsed < min) return min;
+  if (parsed > max) return max;
+  return parsed;
+}
+
+function normalizePositiveInt(value: number, fallback: number, max = Number.MAX_SAFE_INTEGER): number {
+  return clampInt(value, fallback, 1, max);
+}
+
+function dateDaysAgo(days: number): Date {
+  const normalizedDays = Math.max(0, days);
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+  now.setDate(now.getDate() - normalizedDays);
+  return now;
+}
+
+function dateToIsoSeconds(value: Date): string {
+  return value.toISOString();
+}
+
+function parseDateMs(value: string): number {
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function formatEventTime(value: string): string {
+  return new Date(value).toISOString();
+}
+
+function dedupeAndSort<T extends { id: string }>(rows: T[]): T[] {
+  const deduped = new Map<string, T>();
+  for (const row of rows) {
+    deduped.set(row.id, row);
+  }
+  return Array.from(deduped.values());
+}
+
+function coalesceTrimmed(value: unknown, fallback = ''): string {
+  if (typeof value !== 'string') return fallback;
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : fallback;
+}
+
+function getGithubHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github+json',
+    'User-Agent': 'pft-analytics-refresh-data',
+  };
+  if (OPENAI_API_KEY.length > 0 && OPENAI_API_KEY.startsWith('sk-')) {
+    // no-op: intentionally keep in case of accidental key reuse in tests
+  }
+  if (process.env.GITHUB_TOKEN || process.env.PFT_GITHUB_TOKEN) {
+    headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN || process.env.PFT_GITHUB_TOKEN}`;
+  }
+  return headers;
+}
+
+function sanitizeCommitMessage(value: string): string {
+  return value
+    .replace(/\r/g, '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)[0] || 'Untitled commit';
+}
+
+function isPostfiatorgRepo(fullName: string): boolean {
+  return fullName.startsWith(`${GITHUB_ORG}/`);
+}
+
+function parseRepoOwnerAndName(fullName: string): { owner: string; name: string } {
+  const [owner, name] = fullName.split('/');
+  return { owner: owner || 'unknown', name: name || fullName };
+}
+
+function getModelFallbackChain(): string[] {
+  const seen = new Set<string>();
+  const output: string[] = [];
+  for (const model of DEV_ACTIVITY_SUMMARY_FALLBACK_MODELS) {
+    const normalized = coalesceTrimmed(model, '').toLowerCase();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    output.push(normalized);
+  }
+  return output;
+}
+
+function getModelPricing(model: string): { inputUsdPerMillion: number; outputUsdPerMillion: number } {
+  return (
+    OPENAI_MODEL_PRICING[model] || {
+      inputUsdPerMillion: 1,
+      outputUsdPerMillion: 2,
+    }
+  );
+}
+
+function estimateSummaryCostUsd(
+  promptTokens: number,
+  completionTokens: number,
+  model: string,
+): number {
+  const pricing = getModelPricing(model);
+  const inputCost = (Math.max(0, promptTokens) / 1_000_000) * pricing.inputUsdPerMillion;
+  const outputCost = (Math.max(0, completionTokens) / 1_000_000) * pricing.outputUsdPerMillion;
+  return round(inputCost + outputCost, 6);
+}
+
+function estimateTextTokens(value: string): number {
+  return Math.max(1, Math.ceil(coalesceTrimmed(value).length / 4));
+}
+
+function formatSafeModelName(model: string): string {
+  return model.trim().toLowerCase();
+}
+
+async function githubGet<T>(path: string): Promise<{ ok: true; data: T; status: number } | { ok: false; status: number; error: string }> {
+  try {
+    const abortController = new AbortController();
+    const timeout = setTimeout(() => abortController.abort(), GITHUB_REQUEST_TIMEOUT_MS);
+    const response = await fetch(path, {
+      method: 'GET',
+      headers: getGithubHeaders(),
+      signal: abortController.signal,
+    });
+    clearTimeout(timeout);
+    if (!response.ok) {
+      const message = await response.text();
+      return { ok: false, status: response.status, error: `${response.status}: ${message || 'github request failed'}` };
+    }
+    const data = (await response.json()) as T;
+    return { ok: true, data, status: response.status };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function openaiSummarizeBatch(events: DevContributionEvent[]): Promise<Record<string, string>> {
+  if (!OPENAI_API_KEY || events.length === 0) {
+    return {};
+  }
+
+  const summaries: Record<string, string> = {};
+  const chunks = [];
+  const chunkSize = 20;
+
+  for (let i = 0; i < events.length; i += chunkSize) {
+    chunks.push(events.slice(i, i + chunkSize));
+  }
+
+  for (const chunk of chunks) {
+    let attemptError: string | null = null;
+    for (const model of getModelFallbackChain()) {
+      try {
+        const payload = chunk
+          .map((event, idx) => `${idx + 1}. ${event.type} on ${event.repo_full_name}: ${event.title}`)
+          .join('\n');
+        const request = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${OPENAI_API_KEY}`,
+          },
+          body: JSON.stringify({
+            model: formatSafeModelName(model),
+            temperature: 0.2,
+            max_tokens: 180,
+            messages: [
+              {
+                role: 'system',
+                content:
+                  'You summarize software contribution events for a dashboard. Return compact one sentence summaries.',
+              },
+              {
+                role: 'user',
+                content: `Summarize each event below in one short sentence (max 18 words). Return strict JSON only as an array with objects {"index": number, "summary": string}. Use event order exactly as provided.\n\n${payload}`,
+              },
+            ],
+          }),
+        });
+
+        if (!request.ok) {
+          const errBody = await request.text();
+          throw new Error(`OpenAI ${request.status}: ${errBody}`);
+        }
+        const result = (await request.json()) as {
+          choices?: Array<{ message?: { content?: string } }>;
+          usage?: { prompt_tokens?: number; completion_tokens?: number };
+        };
+        const content = result.choices?.[0]?.message?.content?.trim() || '';
+        if (!content) {
+          throw new Error('OpenAI returned empty content');
+        }
+        const parsed = JSON.parse(content);
+        if (!Array.isArray(parsed)) {
+          throw new Error('OpenAI returned non-array response');
+        }
+        for (const row of parsed) {
+          const idx = typeof row?.index === 'number' ? row.index - 1 : -1;
+          const summary = coalesceTrimmed(row?.summary, '');
+          if (idx >= 0 && idx < chunk.length && summary) {
+            summaries[chunk[idx].id] = summary;
+          }
+        }
+        break;
+      } catch (error) {
+        attemptError = error instanceof Error ? error.message : String(error);
+      }
+    }
+    if (attemptError) {
+      for (const event of chunk) {
+        summaries[event.id] = event.type === 'merged_pr'
+          ? `Merged PR in ${event.repo_name} by ${event.actor_login}.`
+          : `Commit by ${event.actor_login} in ${event.repo_name}.`;
+      }
+    }
+  }
+
+  return summaries;
+}
+
+async function fetchHistoricalDevActivity(): Promise<HistoricalDevActivity> {
+  try {
+    const historyUrl = new URL(NETWORK_DATA_URL);
+    historyUrl.searchParams.set('history_ts', Date.now().toString());
+
+    const response = await fetch(historyUrl.toString(), { cache: 'no-store' });
+    if (!response.ok) {
+      return { events: [], contributors: [], spend: null, generatedAt: '' };
+    }
+
+    const payload = (await response.json()) as {
+      dev_activity?: {
+        events?: unknown;
+        contributors?: unknown;
+        spend_monitor?: unknown;
+      };
+      metadata?: { generated_at?: string };
+    };
+
+    const historicalEvents = Array.isArray(payload?.dev_activity?.events)
+      ? (payload.dev_activity.events as DevContributionEvent[])
+      : [];
+    const historicalContributors = Array.isArray(payload?.dev_activity?.contributors)
+      ? (payload.dev_activity.contributors as DevContributor[])
+      : [];
+    const spend =
+      payload?.dev_activity?.spend_monitor && typeof payload.dev_activity.spend_monitor === 'object'
+        ? (payload.dev_activity.spend_monitor as DevFeedSpend)
+        : null;
+    const generatedAt = coalesceTrimmed(payload?.metadata?.generated_at, '');
+
+    return {
+      events: historicalEvents.filter((event) => {
+        if (!event || typeof event.id !== 'string' || !event.occurred_at) {
+          return false;
+        }
+        return true;
+      }),
+      contributors: historicalContributors.filter((contributor) => typeof contributor.github_login === 'string'),
+      spend,
+      generatedAt,
+    };
+  } catch {
+    return { events: [], contributors: [], spend: null, generatedAt: '' };
+  }
+}
+
+async function fetchPostfiatorgRepos(): Promise<string[]> {
+  try {
+    const repos: string[] = [];
+    let page = 1;
+    while (page <= 2) {
+      const path = new URL(`${GITHUB_API_BASE}/orgs/${GITHUB_ORG}/repos`);
+      path.searchParams.set('per_page', '100');
+      path.searchParams.set('page', String(page));
+      path.searchParams.set('type', 'all');
+
+      const response = await githubGet<unknown[]>(path.toString());
+      if (!response.ok) {
+        break;
+      }
+      const batch = response.data;
+      if (!Array.isArray(batch) || batch.length === 0) {
+        break;
+      }
+      for (const repo of batch) {
+        const repoName = coalesceTrimmed((repo as { full_name?: string }).full_name, '');
+        if (!repoName) continue;
+        repos.push(repoName);
+      }
+      if (batch.length < 100) break;
+      page += 1;
+    }
+    return repos;
+  } catch {
+    return [];
+  }
+}
+
+function toCommitEvent(
+  repoFullName: string,
+  item: GitHubSearchCommitItem,
+  isPostfiatorg: boolean,
+): DevContributionEvent | null {
+  const sha = coalesceTrimmed(item.sha, '');
+  const occurredAt = coalesceTrimmed(item.commit?.author?.date || item.commit?.committer?.date, '');
+  const url = coalesceTrimmed(item.html_url, '');
+  const actorLogin = coalesceTrimmed(item.author?.login, 'unknown');
+  const message = coalesceTrimmed(item.commit?.message, '');
+
+  if (!sha || !occurredAt || !url || !actorLogin) {
+    return null;
+  }
+  const title = sanitizeCommitMessage(message);
+  const { owner, name } = parseRepoOwnerAndName(repoFullName);
+
+  return {
+    id: `commit:${repoFullName}:${sha}`,
+    type: 'commit',
+    occurred_at: formatEventTime(occurredAt),
+    actor_login: actorLogin,
+    repo_full_name: repoFullName,
+    repo_owner: owner,
+    repo_name: name,
+    title,
+    summary: title,
+    summary_is_llm_generated: false,
+    url,
+    sha,
+    is_postfiatorg_repo: isPostfiatorg,
+  };
+}
+
+function toPullRequestEvent(
+  repoFullName: string,
+  item: GitHubPull,
+  isPostfiatorg: boolean,
+): DevContributionEvent | null {
+  const mergedAt = coalesceTrimmed(item.merged_at, '');
+  const url = coalesceTrimmed(item.html_url, '');
+  const actorLogin = coalesceTrimmed(item.merged_by?.login || item.user?.login, 'unknown');
+  const title = coalesceTrimmed(item.title, '');
+  const number = item.number;
+
+  if (!mergedAt || !url || !actorLogin) {
+    return null;
+  }
+  const summaryFallback = `Merged PR #${number || ''} in ${parseRepoOwnerAndName(repoFullName).name}`;
+  const { owner, name } = parseRepoOwnerAndName(repoFullName);
+  return {
+    id: `pull:${repoFullName}:${number || item.title}`,
+    type: 'merged_pr',
+    occurred_at: formatEventTime(mergedAt),
+    actor_login: actorLogin,
+    repo_full_name: repoFullName,
+    repo_owner: owner,
+    repo_name: name,
+    title: title || `PR #${number || 'merged'}`,
+    summary: summaryFallback,
+    summary_is_llm_generated: false,
+    url,
+    pr_number: number,
+    is_postfiatorg_repo: isPostfiatorg,
+  };
+}
+
+async function fetchCommitsForRepo(
+  repoFullName: string,
+  since: string,
+  maxPages = 2
+): Promise<DevContributionEvent[]> {
+  const events: DevContributionEvent[] = [];
+  const isPostfiatorg = isPostfiatorgRepo(repoFullName);
+
+  for (let page = 1; page <= maxPages; page += 1) {
+    const path = new URL(`${GITHUB_API_BASE}/repos/${repoFullName}/commits`);
+    path.searchParams.set('per_page', '100');
+    path.searchParams.set('page', String(page));
+    path.searchParams.set('since', since);
+
+    const response = await githubGet<unknown[]>(path.toString());
+    if (!response.ok) return events;
+    if (!Array.isArray(response.data)) return events;
+
+    for (const row of response.data) {
+      const event = toCommitEvent(repoFullName, row as GitHubSearchCommitItem, isPostfiatorg);
+      if (event) {
+        events.push(event);
+      }
+    }
+    if (response.data.length < 100) {
+      break;
+    }
+  }
+
+  return events;
+}
+
+async function fetchMergedPullsForRepo(
+  repoFullName: string,
+  since: string,
+  maxPages = 2
+): Promise<DevContributionEvent[]> {
+  const events: DevContributionEvent[] = [];
+  const isPostfiatorg = isPostfiatorgRepo(repoFullName);
+  const sinceTs = parseDateMs(since);
+
+  for (let page = 1; page <= maxPages; page += 1) {
+    const path = new URL(`${GITHUB_API_BASE}/repos/${repoFullName}/pulls`);
+    path.searchParams.set('state', 'closed');
+    path.searchParams.set('sort', 'updated');
+    path.searchParams.set('direction', 'desc');
+    path.searchParams.set('per_page', '100');
+    path.searchParams.set('page', String(page));
+
+    const response = await githubGet<unknown[]>(path.toString());
+    if (!response.ok) return events;
+    if (!Array.isArray(response.data)) return events;
+
+    for (const row of response.data) {
+      const mergedAt = coalesceTrimmed((row as GitHubPull).merged_at, '');
+      if (!mergedAt || parseDateMs(mergedAt) < sinceTs) {
+        continue;
+      }
+      const event = toPullRequestEvent(repoFullName, row as GitHubPull, isPostfiatorg);
+      if (event) {
+        events.push(event);
+      }
+    }
+    if (response.data.length < 100) {
+      break;
+    }
+  }
+
+  return events;
+}
+
+async function discoverContributorRepos(login: string, since: string): Promise<string[]> {
+  if (!login || login === 'unknown') return [];
+  const repos = new Set<string>();
+  const q = `author:${login} committer-date:>${since.slice(0, 10)}`;
+  const path = new URL(`${GITHUB_API_BASE}/search/commits`);
+  path.searchParams.set('q', q);
+  path.searchParams.set('sort', 'committer-date');
+  path.searchParams.set('order', 'desc');
+  path.searchParams.set('per_page', '100');
+
+  const response = await githubGet<{ items?: GitHubSearchCommitItem[] }>(path.toString());
+  if (!response.ok || !response.data?.items) {
+    return [];
+  }
+
+  for (const row of response.data.items) {
+    const repoName = coalesceTrimmed(row.repository?.full_name, '');
+    if (repoName && !isPostfiatorgRepo(repoName)) {
+      repos.add(repoName);
+    }
+  }
+
+  return Array.from(repos);
+}
+
+function buildDevActivityStats(
+  rows: DevContributionEvent[],
+  lookbackTs: number
+): DevFeedStats {
+  const recent = rows.filter((row) => parseDateMs(row.occurred_at) >= lookbackTs);
+  const uniqueContributors = new Set<string>(recent.map((row) => row.actor_login));
+  let externalCount = 0;
+  for (const row of recent) {
+    if (!row.is_postfiatorg_repo) {
+      externalCount += 1;
+    }
+  }
+  return {
+    total_events_7d: recent.length,
+    postfiatorg_events_7d: recent.length - externalCount,
+    external_repo_events_7d: externalCount,
+    unique_contributors_7d: uniqueContributors.size,
+  };
+}
+
 function normalizeDailyActivity(input: unknown): DailyActivity[] {
   if (!Array.isArray(input)) {
     return [];
@@ -375,6 +990,228 @@ function fillDailyActivityGaps(rows: DailyActivity[]): DailyActivity[] {
   }
 
   return filled;
+}
+
+function limitAndSortEvents(events: DevContributionEvent[]): DevContributionEvent[] {
+  const rows = dedupeAndSort(events);
+  rows.sort((a, b) => {
+    const aTime = parseDateMs(a.occurred_at);
+    const bTime = parseDateMs(b.occurred_at);
+    return bTime - aTime;
+  });
+  return rows.slice(0, normalizePositiveInt(DEV_ACTIVITY_MAX_EVENTS, 120, 9999));
+}
+
+async function collectDevContributionFeed(): Promise<{
+  events: DevContributionEvent[];
+  contributors: DevContributor[];
+  metadata: {
+    orgRepos: number;
+    externalRepos: number;
+    activeContributors: number;
+    failures: string[];
+    eventCount: number;
+  };
+  spend: {
+    run_estimated_usd: number;
+    run_event_count: number;
+  };
+}> {
+  const failures: string[] = [];
+  const activeContributors = new Set<string>();
+  const contributorMap = new Map<string, DevContributor>();
+
+  const lookbackIso7 = dateToIsoSeconds(dateDaysAgo(DEV_ACTIVITY_LOOKBACK_DAYS));
+  const lookbackIso30 = dateToIsoSeconds(dateDaysAgo(DEV_ACTIVITY_ACTIVE_CONTRIBUTOR_DAYS));
+  const lookbackTs7 = parseDateMs(lookbackIso7);
+  const lookbackTs30 = parseDateMs(lookbackIso30);
+  const keepThresholdTs = parseDateMs(dateToIsoSeconds(dateDaysAgo(DEV_ACTIVITY_KEEP_DAYS)));
+  const today = new Date().toISOString().slice(0, 10);
+
+  const orgRepos = await fetchPostfiatorgRepos();
+  if (orgRepos.length === 0) {
+    failures.push('No postfiatorg repos discovered');
+  }
+
+  const orgEvents: DevContributionEvent[] = [];
+  for (const repo of orgRepos) {
+    try {
+      const commits30 = await fetchCommitsForRepo(repo, lookbackIso30);
+      const prs30 = await fetchMergedPullsForRepo(repo, lookbackIso30);
+      const snapshot = [...commits30, ...prs30];
+      snapshot.forEach((row) => {
+        if (parseDateMs(row.occurred_at) >= lookbackTs30) {
+          activeContributors.add(row.actor_login);
+          contributorMap.set(row.actor_login, {
+            github_login: row.actor_login,
+            source: 'postfiatorg_recent_commit_or_pr',
+            last_seen_at: row.occurred_at,
+          });
+        }
+        if (parseDateMs(row.occurred_at) >= lookbackTs7) {
+          orgEvents.push(row);
+        }
+      });
+    } catch (error) {
+      failures.push(`org repo fetch failed: ${repo}`);
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn(`org repo fetch failed: ${repo}`, error);
+      }
+    }
+  }
+
+  const externalRepoSet = new Set<string>();
+  for (const contributor of Array.from(activeContributors).slice(0, DEV_ACTIVITY_MAX_REPOS)) {
+    try {
+      const discovered = await discoverContributorRepos(contributor, lookbackIso30);
+      for (const repo of discovered) {
+        if (!repo.startsWith(`${GITHUB_ORG}/`)) {
+          externalRepoSet.add(repo);
+          if (externalRepoSet.size >= DEV_ACTIVITY_MAX_REPOS) {
+            break;
+          }
+        }
+      }
+    } catch (error) {
+      failures.push(`discover repos failed for ${contributor}`);
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn(`discover repos failed for ${contributor}`, error);
+      }
+    }
+  }
+
+  const externalEvents: DevContributionEvent[] = [];
+  for (const repo of externalRepoSet) {
+    try {
+      const commits7 = await fetchCommitsForRepo(repo, lookbackIso7);
+      const prs7 = await fetchMergedPullsForRepo(repo, lookbackIso7);
+      const rowset = [...commits7, ...prs7];
+      rowset.forEach((row) => {
+        if (parseDateMs(row.occurred_at) >= lookbackTs7) {
+          externalEvents.push(row);
+        }
+      });
+    } catch (error) {
+      failures.push(`external repo fetch failed: ${repo}`);
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn(`external repo fetch failed: ${repo}`, error);
+      }
+    }
+  }
+
+  const historical = await fetchHistoricalDevActivity();
+  const priorEvents = (historical.events || []).filter((event) =>
+    parseDateMs(event.occurred_at) >= keepThresholdTs
+  );
+  const knownSummaries = new Map<string, string>();
+  const knownSummaryGenerated = new Map<string, boolean>();
+  for (const cached of priorEvents) {
+    if (cached?.id && typeof cached.summary === 'string' && cached.summary.length) {
+      knownSummaries.set(cached.id, cached.summary);
+      if (typeof cached.summary_is_llm_generated === 'boolean') {
+        knownSummaryGenerated.set(cached.id, cached.summary_is_llm_generated);
+      }
+    }
+  }
+
+  const combinedEvents = limitAndSortEvents([...priorEvents, ...orgEvents, ...externalEvents]);
+  const eventsWindow = combinedEvents.filter((event) => parseDateMs(event.occurred_at) >= lookbackTs7);
+  const contributors = Array.from(contributorMap.values())
+    .filter((value) => value.github_login !== 'unknown')
+    .sort((a, b) => (a.github_login > b.github_login ? 1 : -1));
+
+  const eventsNeedingSummary: DevContributionEvent[] = [];
+  for (const event of eventsWindow) {
+    const existingSummary = knownSummaries.get(event.id);
+    if (!existingSummary || existingSummary === event.summary || existingSummary === event.title) {
+      eventsNeedingSummary.push(event);
+    }
+    if (existingSummary) {
+      event.summary = existingSummary;
+      if (knownSummaryGenerated.has(event.id)) {
+        event.summary_is_llm_generated = knownSummaryGenerated.get(event.id);
+      }
+    } else if (!event.summary) {
+      event.summary = event.title;
+      event.summary_is_llm_generated = false;
+    }
+  }
+
+  let totalRunCost = 0;
+  if (eventsNeedingSummary.length > 0 && OPENAI_API_KEY) {
+    try {
+      const summaryMap = await openaiSummarizeBatch(eventsNeedingSummary.slice(0, 20));
+      eventsNeedingSummary.forEach((event) => {
+        const mapped = summaryMap[event.id];
+        if (mapped) {
+          event.summary = mapped;
+          knownSummaries.set(event.id, mapped);
+          event.summary_is_llm_generated = true;
+          knownSummaryGenerated.set(event.id, true);
+        }
+      });
+      const estimatedInput = eventsNeedingSummary.slice(0, 20).reduce(
+        (sum, event) =>
+          sum + estimateTextTokens(`commit ${event.repo_full_name} ${event.title} ${event.actor_login}`),
+        0
+      );
+      const estimatedOutput = eventsNeedingSummary.slice(0, 20).reduce(
+        (sum) => sum + 16,
+        0
+      );
+      const model = formatSafeModelName(DEV_ACTIVITY_SUMMARY_FALLBACK_MODELS[0]);
+      totalRunCost = estimateSummaryCostUsd(estimatedInput, estimatedOutput, model);
+    } catch (error) {
+      failures.push(`openai summarize failed: ${error instanceof Error ? error.message : String(error)}`);
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn('openai summarize failed', error);
+      }
+      for (const event of eventsNeedingSummary) {
+        event.summary = event.type === 'merged_pr'
+          ? `Merged PR in ${event.repo_name} by ${event.actor_login}.`
+          : `Commit in ${event.repo_name} by ${event.actor_login}.`;
+        knownSummaries.set(event.id, event.summary);
+        event.summary_is_llm_generated = false;
+        knownSummaryGenerated.set(event.id, false);
+      }
+    }
+  } else {
+    for (const event of eventsWindow) {
+      event.summary = event.summary || (event.type === 'merged_pr'
+        ? `Merged PR in ${event.repo_name} by ${event.actor_login}.`
+        : `Commit in ${event.repo_name} by ${event.actor_login}.`);
+      event.summary_is_llm_generated = false;
+      knownSummaryGenerated.set(event.id, false);
+    }
+  }
+
+  const sorted = limitAndSortEvents(eventsWindow);
+  const todaySpend = historical.generatedAt.startsWith(today)
+    ? historical.spend?.estimated_usd_today ?? 0
+    : 0;
+  const runSummaries = eventsNeedingSummary.length;
+  const estimatedUsdToday = round(todaySpend + totalRunCost, 6);
+  if (estimatedUsdToday > DEV_ACTIVITY_LLM_DAILY_ALERT_USD) {
+    failures.push(
+      `llm-cost-threshold-exceeded-${new Date().toISOString()}: estimated ${estimatedUsdToday} > ${DEV_ACTIVITY_LLM_DAILY_ALERT_USD}`
+    );
+  }
+
+  return {
+    events: sorted,
+    contributors,
+    metadata: {
+      orgRepos: orgRepos.length,
+      externalRepos: externalRepoSet.size,
+      activeContributors: contributors.length,
+      failures,
+      eventCount: sorted.length,
+    },
+    spend: {
+      run_estimated_usd: round(totalRunCost, 6),
+      run_event_count: runSummaries,
+    },
+  };
 }
 
 async function fetchHistoricalDailyActivity(): Promise<DailyActivity[]> {
@@ -1344,6 +2181,16 @@ export default async function handler(request: VercelRequest, response: VercelRe
     );
     const nonTaskTotalTxs = chainNonTaskDailyActivity.reduce((sum, day) => sum + day.tx_count, 0);
     const officialMonthlyRewards = await fetchOfficialMonthlyRewards();
+    const devFeed = await collectDevContributionFeed();
+    const todaysSpend = devFeed.spend.run_estimated_usd;
+    const spendMonitor: DevFeedSpend = {
+      estimated_usd_today: devFeed.spend.run_estimated_usd,
+      threshold_usd: DEV_ACTIVITY_LLM_DAILY_ALERT_USD,
+      threshold_exceeded: todaysSpend >= DEV_ACTIVITY_LLM_DAILY_ALERT_USD,
+      last_alert_at: todaysSpend >= DEV_ACTIVITY_LLM_DAILY_ALERT_USD ? new Date().toISOString() : undefined,
+      run_estimated_usd: devFeed.spend.run_estimated_usd,
+      run_event_count: devFeed.spend.run_event_count,
+    };
 
     // Merge pre-reset baseline with post-reset live data
     const merged = await mergeWithBaseline(
@@ -1373,9 +2220,27 @@ export default async function handler(request: VercelRequest, response: VercelRe
         relay_behavior_candidates_scanned: behaviorRelayDiscovery.scanned_candidates,
         relay_behavior_lookback_days: RELAY_BEHAVIOR_LOOKBACK_DAYS,
         relay_behavior_matches: behaviorRelayDiscovery.matches,
+        github_repos_scanned: devFeed.metadata.orgRepos,
+        github_external_repos_scanned: devFeed.metadata.externalRepos,
+        github_active_contributors_scanned: devFeed.metadata.activeContributors,
+        github_events_collected: devFeed.metadata.eventCount,
+        github_error_count: devFeed.metadata.failures.length,
+        github_request_failures: devFeed.metadata.failures,
       },
       network_totals: merged.networkTotals,
       rewards: merged.rewards,
+      dev_activity: {
+        generated_at: new Date().toISOString(),
+        lookback_days: DEV_ACTIVITY_LOOKBACK_DAYS,
+        active_contributor_window_days: DEV_ACTIVITY_ACTIVE_CONTRIBUTOR_DAYS,
+        contributors: devFeed.contributors,
+        events: devFeed.events,
+        stats: buildDevActivityStats(
+          devFeed.events,
+          dateDaysAgo(DEV_ACTIVITY_LOOKBACK_DAYS).getTime()
+        ),
+        spend_monitor: spendMonitor,
+      },
       non_task_distributions: {
         total_pft_distributed: nonTaskTotalPft,
         total_transactions: nonTaskTotalTxs,
@@ -1421,6 +2286,8 @@ export default async function handler(request: VercelRequest, response: VercelRe
         relay_wallets_discovered_funding: fundingRelayWallets.length,
         relay_wallets_discovered_behavior: behaviorRelayWallets.length,
         new_behavior_relay_wallets: behaviorRelayWallets,
+        dev_activity_events: analytics.dev_activity?.events.length ?? 0,
+        dev_activity_stats: analytics.dev_activity?.stats,
       },
       ...(process.env.DEBUG_WALLET_ANALYSIS === '1'
         ? {
